@@ -10,6 +10,7 @@ final class CyclopsView: NSView {
         case error    // pupila roja + ceño
         case sleepy   // ojo cerrado + z
         case thinking // pupila orbitando + ruedita
+        case reading  // brazos con lupa mirando un documento + ruedita
         case party    // bote + brillo
     }
 
@@ -361,9 +362,58 @@ final class CyclopsView: NSView {
         if face == .sleepy {
             drawZ(ctx: ctx, rows: rows, baseY: baseY)
         }
-        if face == .thinking {
+        if face == .thinking || face == .reading {
             drawSpinner(ctx: ctx, rows: rows, baseY: baseY, sway: sway)
         }
+        if face == .reading {
+            drawReading(ctx: ctx, rows: rows, baseY: baseY, sway: sway)
+        }
+    }
+
+    /// Brazos fantasma sujetando una lupa sobre un documento (modo inspección).
+    private func drawReading(ctx: CGContext, rows: Int, baseY: CGFloat, sway: CGFloat) {
+        let s = scale
+        let originX = Self.xPad + sway
+        // documento: hoja blanca con renglones, abajo a la izquierda del cuerpo
+        let docX = originX + 1.5 * s
+        let docY = baseY - 5 * s
+        Self.body.setFill()
+        ctx.fill(CGRect(x: docX, y: docY, width: 8 * s, height: 10 * s))
+        Self.outline.setFill()
+        ctx.fill(CGRect(x: docX, y: docY, width: 8 * s, height: s * 0.5))          // borde inf
+        ctx.fill(CGRect(x: docX, y: docY + 10 * s - s * 0.5, width: 8 * s, height: s * 0.5)) // sup
+        Self.shade.setFill()
+        for i in 0..<4 {   // renglones
+            ctx.fill(CGRect(x: docX + s, y: docY + s * 2 + CGFloat(i) * 2 * s,
+                            width: 6 * s, height: s * 0.6))
+        }
+        // brazo: línea de cuerpo desde el costado hasta la lupa
+        let armWave = sin(phase * 2.5) * s   // la lupa se mueve escaneando
+        let lensX = docX + 5 * s + armWave
+        let lensY = docY + 6 * s
+        Self.body.setFill()
+        for i in 0..<4 {
+            ctx.fill(CGRect(x: originX + 6 * s + CGFloat(i) * s,
+                            y: baseY + 2 * s - CGFloat(i) * s,
+                            width: s, height: s))
+        }
+        // lupa: aro + mango
+        let r = 2.4 * s
+        ctx.saveGState()
+        ctx.setShouldAntialias(true)
+        ctx.setLineWidth(s)
+        Self.metal.setStroke()
+        ctx.strokeEllipse(in: CGRect(x: lensX - r, y: lensY - r, width: r * 2, height: r * 2))
+        // cristal
+        NSColor(srgbRed: 0.6, green: 0.85, blue: 1.0, alpha: 0.3).setFill()
+        ctx.fillEllipse(in: CGRect(x: lensX - r + s, y: lensY - r + s, width: r * 2 - 2 * s, height: r * 2 - 2 * s))
+        // mango
+        Self.metalD.setStroke()
+        ctx.setLineWidth(s * 1.2)
+        ctx.move(to: CGPoint(x: lensX + r * 0.7, y: lensY - r * 0.7))
+        ctx.addLine(to: CGPoint(x: lensX + r * 1.6, y: lensY - r * 1.6))
+        ctx.strokePath()
+        ctx.restoreGState()
     }
 
     /// Cadenas: eslabones rotados siguiendo la curva, alternando eslabón plano

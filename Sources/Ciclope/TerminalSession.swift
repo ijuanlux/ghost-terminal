@@ -80,6 +80,12 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         view.send(txt: text)
     }
 
+    /// Pinta un paso de boo EN la pantalla del terminal (atenuado, con el
+    /// fantasma), sin mandarlo al shell. Transparencia estilo Claude Code.
+    func printStep(_ text: String) {
+        view.feed(text: "\r\n\u{1B}[2m👻 " + text + "\u{1B}[0m")
+    }
+
     /// Adjunta imágenes/documentos soltados en el terminal para la próxima
     /// pregunta a boo; Ghost lo confirma con un chip [N image · N documents].
     func attachMedia(images: [String], docs: [String]) {

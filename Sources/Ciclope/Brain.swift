@@ -352,9 +352,10 @@ final class Brain {
         }
         say(L.t("thinking"), holdFor: 90)
         setFace(.thinking, for: 90)
+        s.printStep(isEN ? "thinking..." : "pensando...")
         let instructions = isEN
-            ? "\n\n\(userName) asks: \(question)\nYou HAVE REAL ACCESS to this Mac, never say you cannot access files. Mechanisms: (1) to LOOK SOMETHING UP (find files, list, read a document, info) reply ONLY with a ```run fenced block``` containing one read-only command (mdfind, find, ls, du, file, head, cat, mdls...) and you will receive its output; (2) to SHOW content in the terminal (a table, a summary of a document, a long list, a description) reply with an optional short sentence plus a ```print fenced block``` whose content is dumped verbatim into the terminal (use plain text, aligned columns or markdown-ish tables); (3) to PERFORM a side-effecting action (open, move, organize, create) reply with one short sentence plus a ```zsh fenced block``` (mkdir -p, mv, cp, mdfind, open; NEVER delete, move instead; use $HOME). Short chat answers go in the bubble; use print for anything long or formatted. Reply in the language of the question."
-            : "\n\nPregunta de \(userName): \(question)\nTIENES ACCESO REAL a este Mac, nunca digas que no puedes acceder a los ficheros. Mecanismos: (1) para CONSULTAR algo (buscar ficheros, listar, leer un documento, info) responde SOLO con un bloque cercado ```run``` con un comando de solo lectura (mdfind, find, ls, du, file, head, cat, mdls...) y recibirás su salida; (2) para MOSTRAR contenido en la terminal (una tabla, el resumen de un documento, un listado largo, una descripción) responde con una frase corta opcional más un bloque ```print``` cuyo contenido se vuelca tal cual en la terminal (texto plano, columnas alineadas o tablas estilo markdown); (3) para REALIZAR una acción con efectos (abrir, mover, organizar, crear) responde una frase corta más un bloque ```zsh``` (mkdir -p, mv, cp, mdfind, open; NUNCA borres, mueve en su lugar; usa $HOME). Las respuestas cortas de charla van en el bocadillo; usa print para lo largo o formateado. Responde en el idioma de la pregunta."
+            ? "\n\n\(userName) asks: \(question)\nYou HAVE REAL ACCESS to this Mac, never say you cannot access files. Mechanisms: (1) to LOOK SOMETHING UP (find files, list, info) reply ONLY with a ```run fenced block``` containing one read-only command (mdfind, find, ls, du, file, mdls...) and you will receive its output; to READ A DOCUMENT (pdf, docx, txt, md...) reply ONLY with a ```read fenced block``` containing just the file path and you will get its extracted text (NEVER cat a pdf/binary); (2) to SHOW content in the terminal (a table, a summary of a document, a long list, a description) reply with an optional short sentence plus a ```print fenced block``` whose content is dumped verbatim into the terminal (use plain text, aligned columns or markdown-ish tables); (3) to PERFORM a side-effecting action (open, move, organize, create) reply with one short sentence plus a ```zsh fenced block``` (mkdir -p, mv, cp, mdfind, open; NEVER delete, move instead; use $HOME). Short chat answers go in the bubble; use print for anything long or formatted. Reply in the language of the question."
+            : "\n\nPregunta de \(userName): \(question)\nTIENES ACCESO REAL a este Mac, nunca digas que no puedes acceder a los ficheros. Mecanismos: (1) para CONSULTAR algo (buscar ficheros, listar, info) responde SOLO con un bloque cercado ```run``` con un comando de solo lectura (mdfind, find, ls, du, file, mdls...) y recibirás su salida; para LEER UN DOCUMENTO (pdf, docx, txt, md...) responde SOLO con un bloque ```read``` que contenga solo la ruta del fichero y recibirás su texto extraído (NUNCA hagas cat de un pdf/binario); (2) para MOSTRAR contenido en la terminal (una tabla, el resumen de un documento, un listado largo, una descripción) responde con una frase corta opcional más un bloque ```print``` cuyo contenido se vuelca tal cual en la terminal (texto plano, columnas alineadas o tablas estilo markdown); (3) para REALIZAR una acción con efectos (abrir, mover, organizar, crear) responde una frase corta más un bloque ```zsh``` (mkdir -p, mv, cp, mdfind, open; NUNCA borres, mueve en su lugar; usa $HOME). Las respuestas cortas de charla van en el bocadillo; usa print para lo largo o formateado. Responde en el idioma de la pregunta."
         hop(s, question: question, userMsg: context(for: s) + imageNote(s) + instructions,
             loopHist: [], hops: 0, image: s.pendingImage)
         s.pendingImage = nil
@@ -375,8 +376,8 @@ final class Brain {
         if !s.pendingDocs.isEmpty {
             let list = s.pendingDocs.joined(separator: ", ")
             note += isEN
-                ? "\n\n(Attached documents you can read with a ```run``` block (cat/head/mdls): \(list))"
-                : "\n\n(Documentos adjuntos que puedes leer con un bloque ```run``` (cat/head/mdls): \(list))"
+                ? "\n\n(Attached documents you can read with a ```read``` block (one path per block): \(list))"
+                : "\n\n(Documentos adjuntos que puedes leer con un bloque ```read``` (una ruta por bloque): \(list))"
         }
         return note
     }
@@ -404,6 +405,35 @@ final class Brain {
             let t = LMStudio.shared.lastTokens
             Prefs.addBooTokens(t > 0 ? t : (userMsg.count + reply.count) / 4)
 
+            // bloque read: extraer texto de un documento de forma NATIVA (PDFKit
+            // etc.), sin cat de binarios. Rápido y limpio.
+            if let body = fenced.body, fenced.lang == "read", hops < 3 {
+                let path = body.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\"", with: "")
+                self.say(self.pickL(
+                    ["leyendo los espíritus de este documento...",
+                     "invocando lo que dice este papel...",
+                     "escaneando el más allá del PDF..."],
+                    ["reading the spirits of this document...",
+                     "summoning what this paper says...",
+                     "scanning the afterlife of this PDF..."]), holdFor: 60)
+                self.setFace(.reading, for: 60)
+                s.printStep((self.isEN ? "reading " : "leyendo ") + (path as NSString).lastPathComponent)
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let text = DocReader.text(path) ?? "(no pude leer el documento)"
+                    DispatchQueue.main.async {
+                        let next = (self.isEN ? "Text of the document:\n" : "Texto del documento:\n")
+                            + String(text.prefix(6000))
+                            + (self.isEN
+                                ? "\n\nNow answer the user. To show a summary/table in the terminal use ```print```."
+                                : "\n\nAhora responde al usuario. Para mostrar un resumen/tabla en la terminal usa ```print```.")
+                        self.hop(s, question: question, userMsg: next,
+                                 loopHist: loopHist + [(userMsg, reply)], hops: hops + 1)
+                    }
+                }
+                return
+            }
+
             // bloque run: consultar la máquina en silencio y devolverle la salida
             if let body = fenced.body, fenced.lang == "run", hops < 3, Prefs.booActions {
                 guard self.runIsSafe(body) else {
@@ -412,12 +442,13 @@ final class Brain {
                 }
                 self.say(self.isEN ? "let me look..." : "déjame mirar...", holdFor: 60)
                 self.setFace(.thinking, for: 60)
+                s.printStep((self.isEN ? "running: " : "ejecutando: ") + body.prefix(60))
                 Self.execQuiet(body) { output in
                     let next = (self.isEN ? "Output of `\(body)`:\n" : "Salida de `\(body)`:\n")
                         + String(output.prefix(1800))
                         + (self.isEN
-                            ? "\n\nContinue: answer the user with what you found, request another lookup with ```run```, or perform a visible action with ```zsh```."
-                            : "\n\nContinúa: responde al usuario con lo que has encontrado, pide otra consulta con ```run```, o haz una acción visible con ```zsh```.")
+                            ? "\n\nContinue: answer the user, look up more with ```run```, read a document with ```read```, or act with ```zsh```."
+                            : "\n\nContinúa: responde al usuario, consulta más con ```run```, lee un documento con ```read```, o actúa con ```zsh```.")
                     self.hop(s, question: question, userMsg: next,
                              loopHist: loopHist + [(userMsg, reply)], hops: hops + 1)
                 }
@@ -426,6 +457,7 @@ final class Brain {
 
             // respuesta final
             self.setFace(.normal, for: 0)
+            s.printStep((self.isEN ? "done" : "listo") + "\r\n")
             Prefs.countBooQuery()
             s.chat.append((question, reply))
             if s.chat.count > 8 { s.chat.removeFirst(s.chat.count - 8) }
@@ -449,7 +481,17 @@ final class Brain {
                     self.showScriptForReview(script)
                 }
             } else {
-                self.sayLLMReply(reply, holdFor: 16)
+                // respuesta de texto: si es larga (resumen, explicación), al
+                // terminal aunque el modelo olvidara el bloque print; si es
+                // corta, al bocadillo como siempre
+                let clean = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+                if clean.count > 220 {
+                    self.printToTerminal(clean, on: s)
+                    self.sayLLMReply(self.isEN ? "there you go, in the terminal" : "ahí lo tienes, en la terminal",
+                                     holdFor: 8)
+                } else {
+                    self.sayLLMReply(reply, holdFor: 16)
+                }
             }
         }
     }
