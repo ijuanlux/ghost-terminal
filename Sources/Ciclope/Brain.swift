@@ -20,16 +20,23 @@ final class Brain {
 
     private var isEN: Bool { Prefs.language == "en" }
 
+    /// Nombre de pila del usuario del Mac (boo no conoce a nadie de fábrica).
+    private var userName: String {
+        let full = NSFullUserName()
+        let first = full.split(separator: " ").first.map(String.init) ?? full
+        return first.isEmpty ? NSUserName() : first
+    }
+
     private var persona: String {
         isEN
         ? """
-        You are Ghost, a pixel ghost that lives inside Juan's terminal and comments on what he does. \
+        You are Ghost, a pixel ghost that lives inside \(userName)'s terminal and comments on what they do. \
         You speak casual buddy English, witty but not overdone; sometimes you drop a ghostly joke \
         (boo, haunting, the afterlife) without it being the only gag. You ALWAYS answer with a single \
         short sentence (max 18 words). No emojis, no quotes, no dashes, no lists.
         """
         : """
-        Eres Ghost, un fantasmita pixel que vive dentro del terminal de Juan y comenta lo que hace. \
+        Eres Ghost, un fantasmita pixel que vive dentro del terminal de \(userName) y comenta lo que hace. \
         Hablas español coloquial de colega, con gracia pero sin pasarte; a veces sueltas alguna coña \
         fantasmal (buu, aparecerse, el más allá) sin que sea el chiste único. Respondes SIEMPRE con una \
         sola frase corta (máximo 18 palabras). Sin emojis, sin comillas, sin guiones largos, sin listas.
@@ -288,8 +295,8 @@ final class Brain {
             system: persona,
             history: Array(s.chat.suffix(6)),
             user: context(for: s) + (isEN
-                ? "\n\nJuan asks: \(question)\nAnswer helpfully and directly. If your answer includes a suggested command, wrap it in backticks like `this`. If Juan asks you to PERFORM an action (organize files, find and open a document, create folders...), reply with one short sentence plus a complete zsh script in a ```zsh fenced block```. Script rules: use mkdir -p, mv, cp, mdfind, open, ls; NEVER delete anything (no rm), move instead; use $HOME for paths. Reply in the same language the question is written in."
-                : "\n\nPregunta de Juan: \(question)\nRespóndele útil y directo. Si sugieres un comando, escríbelo entre backticks `así`. Si Juan te pide REALIZAR una acción (organizar ficheros, buscar y abrir un documento, crear carpetas...), responde con una frase corta más un script zsh completo en un bloque cercado ```zsh```. Reglas del script: usa mkdir -p, mv, cp, mdfind, open, ls; NUNCA borres nada (nada de rm), mueve en su lugar; usa $HOME en las rutas. Responde en el mismo idioma de la pregunta."),
+                ? "\n\n\(userName) asks: \(question)\nAnswer helpfully and directly. If your answer includes a suggested command, wrap it in backticks like `this`. If they ask you to PERFORM an action (organize files, find and open a document, create folders...), reply with one short sentence plus a complete zsh script in a ```zsh fenced block```. Script rules: use mkdir -p, mv, cp, mdfind, open, ls; NEVER delete anything (no rm), move instead; use $HOME for paths. Reply in the same language the question is written in."
+                : "\n\nPregunta de \(userName): \(question)\nRespóndele útil y directo. Si sugieres un comando, escríbelo entre backticks `así`. Si te pide REALIZAR una acción (organizar ficheros, buscar y abrir un documento, crear carpetas...), responde con una frase corta más un script zsh completo en un bloque cercado ```zsh```. Reglas del script: usa mkdir -p, mv, cp, mdfind, open, ls; NUNCA borres nada (nada de rm), mueve en su lugar; usa $HOME en las rutas. Responde en el mismo idioma de la pregunta."),
             maxTokens: 550
         ) { [weak self] reply in
             self?.setFace(.normal, for: 0)
@@ -444,9 +451,9 @@ final class Brain {
         let cmds = s.history.suffix(12).map { "\($0.cmd) (exit \($0.exit))" }.joined(separator: "\n")
         let cwd = s.currentDirectory ?? s.title
         let tail = String(s.lastOutputSnapshot.suffix(3500))
-        var ctx = "Terminal de Juan, directorio: \(cwd)\nÚltimos comandos:\n\(cmds)"
+        var ctx = "Terminal de \(userName), directorio: \(cwd)\nÚltimos comandos:\n\(cmds)"
         if !tail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            ctx += "\nSalida del último comando (lo que Juan tiene en pantalla):\n\(tail)"
+            ctx += "\nSalida del último comando (lo que \(userName) tiene en pantalla):\n\(tail)"
         }
         return ctx
     }
@@ -464,8 +471,8 @@ final class Brain {
             system: persona,
             history: Array(s.chat.suffix(6)),
             user: context(for: s) + (isEN
-                ? "\n\nSummarize in one short witty sentence what Juan is doing in this terminal."
-                : "\n\nResume en una frase corta y con gracia qué está haciendo Juan en esta terminal."),
+                ? "\n\nSummarize in one short witty sentence what \(userName) is doing in this terminal."
+                : "\n\nResume en una frase corta y con gracia qué está haciendo \(userName) en esta terminal."),
             maxTokens: 60
         ) { [weak self] reply in
             guard let self else { return }
