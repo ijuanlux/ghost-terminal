@@ -157,12 +157,33 @@ final class CiclopeTerminalView: LocalProcessTerminalView {
         sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: nil) ? .copy : []
     }
 
+    private static let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "bmp", "tiff"]
+    private static let docExts: Set<String> = ["pdf", "txt", "md", "markdown", "doc", "docx", "rtf",
+                                               "csv", "json", "xml", "yaml", "yml", "log", "pages"]
+
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
         guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL],
               !urls.isEmpty else { return false }
-        let paths = urls.map { Self.shellEscape($0.path) }.joined(separator: " ")
-        send(txt: paths + " ")
+
+        // Imágenes y documentos se adjuntan a boo (no ensucian el prompt con la
+        // ruta): Ghost muestra un chip [N image] / [N documents] estilo Claude.
+        // El resto de ficheros sí se escriben como ruta (útil para comandos).
+        var images: [String] = [], docs: [String] = [], others: [URL] = []
+        for url in urls {
+            let ext = url.pathExtension.lowercased()
+            if Self.imageExts.contains(ext) { images.append(url.path) }
+            else if Self.docExts.contains(ext) { docs.append(url.path) }
+            else { others.append(url) }
+        }
+
+        if !images.isEmpty || !docs.isEmpty {
+            session?.attachMedia(images: images, docs: docs)
+        }
+        if !others.isEmpty {
+            let paths = others.map { Self.shellEscape($0.path) }.joined(separator: " ")
+            send(txt: paths + " ")
+        }
         window?.makeFirstResponder(self)
         return true
     }
@@ -528,6 +549,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             self?.bubble.follow()
         }
         cyclops.onDropped = { [weak self] screenPoint in self?.ghostDropped(at: screenPoint) }
+        cyclops.onImageDropped = { [weak self] path in self?.brain.attachImage(path) }
 
         mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved]) { [weak self] event in
             guard let self, event.window === self.window else { return event }

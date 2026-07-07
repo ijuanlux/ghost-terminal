@@ -192,6 +192,19 @@ final class Brain {
         }
     }
 
+    /// Imprime contenido (tabla, resumen, listado, descripción) EN el terminal,
+    /// tal cual, preservando formato: lo escribe a un fichero y hace cat.
+    private func printToTerminal(_ text: String, on s: TerminalSession) {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Ciclope", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("boo-print.txt")
+        try? (text + "\n").write(to: url, atomically: true, encoding: .utf8)
+        DispatchQueue.main.async {
+            s.send("cat '" + url.path + "'\n")
+        }
+    }
+
     /// Firma discreta con el modelo: distingue respuesta del LLM de frase enlatada.
     private var llmTag: String {
         guard let m = LMStudio.shared.modelName else { return "" }
@@ -340,21 +353,42 @@ final class Brain {
         say(L.t("thinking"), holdFor: 90)
         setFace(.thinking, for: 90)
         let instructions = isEN
-            ? "\n\n\(userName) asks: \(question)\nYou HAVE REAL ACCESS to this Mac, never say you cannot access files. Two mechanisms: (1) to LOOK SOMETHING UP (find files, list, read info) reply ONLY with a ```run fenced block``` containing one read-only command (mdfind, find, ls, du, file, head...) and you will receive its output; (2) to PERFORM a visible action (open, move, organize, create) reply with one short sentence plus a ```zsh fenced block``` (mkdir -p, mv, cp, mdfind, open; NEVER delete, move instead; use $HOME). If it is just conversation, answer normally; suggested commands go in backticks `like this`. Reply in the language of the question."
-            : "\n\nPregunta de \(userName): \(question)\nTIENES ACCESO REAL a este Mac, nunca digas que no puedes acceder a los ficheros. Dos mecanismos: (1) para CONSULTAR algo (buscar ficheros, listar, leer info) responde SOLO con un bloque cercado ```run``` con un comando de solo lectura (mdfind, find, ls, du, file, head...) y recibirás su salida; (2) para REALIZAR una acción visible (abrir, mover, organizar, crear) responde una frase corta más un bloque ```zsh``` (mkdir -p, mv, cp, mdfind, open; NUNCA borres, mueve en su lugar; usa $HOME). Si es solo conversación, responde normal; comandos sugeridos entre backticks `así`. Responde en el idioma de la pregunta."
-        hop(s, question: question, userMsg: context(for: s) + instructions, loopHist: [], hops: 0)
+            ? "\n\n\(userName) asks: \(question)\nYou HAVE REAL ACCESS to this Mac, never say you cannot access files. Mechanisms: (1) to LOOK SOMETHING UP (find files, list, read a document, info) reply ONLY with a ```run fenced block``` containing one read-only command (mdfind, find, ls, du, file, head, cat, mdls...) and you will receive its output; (2) to SHOW content in the terminal (a table, a summary of a document, a long list, a description) reply with an optional short sentence plus a ```print fenced block``` whose content is dumped verbatim into the terminal (use plain text, aligned columns or markdown-ish tables); (3) to PERFORM a side-effecting action (open, move, organize, create) reply with one short sentence plus a ```zsh fenced block``` (mkdir -p, mv, cp, mdfind, open; NEVER delete, move instead; use $HOME). Short chat answers go in the bubble; use print for anything long or formatted. Reply in the language of the question."
+            : "\n\nPregunta de \(userName): \(question)\nTIENES ACCESO REAL a este Mac, nunca digas que no puedes acceder a los ficheros. Mecanismos: (1) para CONSULTAR algo (buscar ficheros, listar, leer un documento, info) responde SOLO con un bloque cercado ```run``` con un comando de solo lectura (mdfind, find, ls, du, file, head, cat, mdls...) y recibirás su salida; (2) para MOSTRAR contenido en la terminal (una tabla, el resumen de un documento, un listado largo, una descripción) responde con una frase corta opcional más un bloque ```print``` cuyo contenido se vuelca tal cual en la terminal (texto plano, columnas alineadas o tablas estilo markdown); (3) para REALIZAR una acción con efectos (abrir, mover, organizar, crear) responde una frase corta más un bloque ```zsh``` (mkdir -p, mv, cp, mdfind, open; NUNCA borres, mueve en su lugar; usa $HOME). Las respuestas cortas de charla van en el bocadillo; usa print para lo largo o formateado. Responde en el idioma de la pregunta."
+        hop(s, question: question, userMsg: context(for: s) + imageNote(s) + instructions,
+            loopHist: [], hops: 0, image: s.pendingImage)
+        s.pendingImage = nil
+        s.pendingDocs = []
     }
 
     /// Un salto del bucle agéntico: el LLM puede pedir comandos de consulta
     /// (bloque run, ejecutados en silencio, salida de vuelta, máx 3 saltos)
     /// antes de responder o de lanzar una acción visible.
+    /// Notas para el prompt: imagen adjunta y/o documentos que boo puede leer.
+    private func imageNote(_ s: TerminalSession) -> String {
+        var note = ""
+        if s.pendingImage != nil {
+            note += isEN
+                ? "\n\n(An image is attached to this message; look at it to answer.)"
+                : "\n\n(Hay una imagen adjunta a este mensaje; mírala para responder.)"
+        }
+        if !s.pendingDocs.isEmpty {
+            let list = s.pendingDocs.joined(separator: ", ")
+            note += isEN
+                ? "\n\n(Attached documents you can read with a ```run``` block (cat/head/mdls): \(list))"
+                : "\n\n(Documentos adjuntos que puedes leer con un bloque ```run``` (cat/head/mdls): \(list))"
+        }
+        return note
+    }
+
     private func hop(_ s: TerminalSession, question: String, userMsg: String,
-                     loopHist: [(q: String, a: String)], hops: Int) {
+                     loopHist: [(q: String, a: String)], hops: Int, image: String? = nil) {
         LMStudio.shared.chat(
             system: persona,
             history: Array(s.chat.suffix(6)) + loopHist,
             user: userMsg,
-            maxTokens: 600
+            maxTokens: 600,
+            imagePath: image
         ) { [weak self] reply in
             guard let self else { return }
             guard let reply else {
@@ -390,12 +424,21 @@ final class Brain {
                 return
             }
 
-            // respuesta final (con o sin acción visible)
+            // respuesta final
             self.setFace(.normal, for: 0)
             Prefs.countBooQuery()
             s.chat.append((question, reply))
             if s.chat.count > 8 { s.chat.removeFirst(s.chat.count - 8) }
-            if let script = fenced.body {
+
+            // bloque print: volcar contenido formateado (tabla, resumen, listado,
+            // descripción) EN el terminal, no en el bocadillo
+            if let body = fenced.body, fenced.lang == "print" {
+                self.printToTerminal(body, on: s)
+                let msg = fenced.rest.isEmpty
+                    ? (self.isEN ? "there you go, in the terminal" : "ahí lo tienes, en la terminal")
+                    : fenced.rest
+                self.sayLLMReply(msg, holdFor: 10)
+            } else if let script = fenced.body {
                 if Prefs.booActions && self.scriptIsSafe(script) {
                     self.runAction(script, on: s)
                     let msg = fenced.rest.isEmpty
@@ -409,6 +452,27 @@ final class Brain {
                 self.sayLLMReply(reply, holdFor: 16)
             }
         }
+    }
+
+    /// Chip estilo Claude al soltar media en el terminal: [1 image · 2 documents].
+    func confirmMedia(images: Int, docs: Int) {
+        touch()
+        var parts: [String] = []
+        if images > 0 { parts.append("\(images) image" + (images == 1 ? "" : "s")) }
+        if docs > 0 { parts.append("\(docs) document" + (docs == 1 ? "" : "s")) }
+        let chip = "[" + parts.joined(separator: " · ") + "]"
+        say(chip + (isEN ? "  ask me with boo" : "  pregúntame con boo"), holdFor: 12)
+    }
+
+    /// Imagen soltada sobre Ghost: queda adjunta para la próxima pregunta a boo.
+    func attachImage(_ path: String) {
+        touch()
+        attached?.pendingImage = path
+        let name = (path as NSString).lastPathComponent
+        say(pickL(["imagen lista: \(name). pregúntame por ella con boo",
+                   "ya la veo. dime qué quieres saber con boo"],
+                  ["got the image: \(name). ask me about it with boo",
+                   "I can see it. ask me anything with boo"]), holdFor: 10)
     }
 
     /// Click en el fantasma: resumen bajo demanda de su terminal.

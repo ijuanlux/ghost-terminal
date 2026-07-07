@@ -17,6 +17,7 @@ final class CyclopsView: NSView {
     var onClick: (() -> Void)?
     var onMoved: (() -> Void)?
     var onDropped: ((NSPoint) -> Void)?   // punto en pantalla al soltar tras arrastre
+    var onImageDropped: ((String) -> Void)?   // ruta de imagen soltada sobre Ghost
 
     private var dragStart: NSPoint?
     private var didDrag = false
@@ -96,6 +97,26 @@ final class CyclopsView: NSView {
             self?.tick()
         }
         RunLoop.main.add(timer!, forMode: .common)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    // MARK: - Soltar imágenes sobre Ghost (visión de boo)
+    private static let imageExts: Set<String> = ["png","jpg","jpeg","gif","webp","heic"]
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        droppedImagePath(sender) != nil ? .copy : []
+    }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let path = droppedImagePath(sender) else { return false }
+        onImageDropped?(path)
+        return true
+    }
+    private func droppedImagePath(_ sender: NSDraggingInfo) -> String? {
+        let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: opts) as? [URL],
+              let url = urls.first,
+              Self.imageExts.contains(url.pathExtension.lowercased()) else { return nil }
+        return url.path
     }
 
     required init?(coder: NSCoder) { fatalError() }

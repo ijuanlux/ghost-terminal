@@ -50,6 +50,10 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var runningCommand: String?
     /// Comando reanudable pendiente (claude --continue) tras una restauración.
     private(set) var pendingResume: String?
+    /// Imagen adjunta para la próxima pregunta a boo (visión).
+    var pendingImage: String?
+    /// Documentos adjuntos para la próxima pregunta a boo (los lee con run).
+    var pendingDocs: [String] = []
     private var resumeScheduled = false
     private static var resumeStagger = 0
     var commandCount = 0
@@ -74,6 +78,14 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     /// Escribe texto en el shell como si lo tecleara el usuario.
     func send(_ text: String) {
         view.send(txt: text)
+    }
+
+    /// Adjunta imágenes/documentos soltados en el terminal para la próxima
+    /// pregunta a boo; Ghost lo confirma con un chip [N image · N documents].
+    func attachMedia(images: [String], docs: [String]) {
+        if let last = images.last { pendingImage = last }
+        pendingDocs.append(contentsOf: docs)
+        brain?.confirmMedia(images: images.count, docs: docs.count)
     }
 
     /// Pregunta a boo sobre un texto seleccionado en el terminal.

@@ -9,6 +9,17 @@ final class LMStudio {
 
     /// Nombre del modelo cargado (para firmar las respuestas del LLM).
     var modelName: String? { cachedModel }
+
+    /// Codifica una imagen del disco como data URI base64 (para modelos de visión).
+    static func imageDataURI(_ path: String) -> String? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        let ext = (path as NSString).pathExtension.lowercased()
+        let mime = ["png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                    "gif": "image/gif", "webp": "image/webp", "heic": "image/heic"][ext] ?? "image/png"
+        // cap ~6MB para no reventar el prompt
+        guard data.count < 6_000_000 else { return nil }
+        return "data:\(mime);base64," + data.base64EncodedString()
+    }
     /// Tokens reales (prompt+completion) de la última respuesta, del campo usage.
     private(set) var lastTokens = 0
     private var lastCheck = Date.distantPast
@@ -44,22 +55,30 @@ final class LMStudio {
     /// Chat corto. `history` son intercambios previos (pregunta, respuesta) para
     /// que el modelo mantenga el hilo. Devuelve nil si LM Studio no está o falla.
     func chat(system: String, history: [(q: String, a: String)] = [], user: String, maxTokens: Int = 90,
-              completion: @escaping (String?) -> Void) {
+              imagePath: String? = nil, completion: @escaping (String?) -> Void) {
         checkAvailable { [weak self] ok in
             guard ok, let self, let model = self.cachedModel else {
                 completion(nil)
                 return
             }
             var req = URLRequest(url: self.base.appendingPathComponent("chat/completions"),
-                                 timeoutInterval: 90)
+                                 timeoutInterval: 120)
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            var messages: [[String: String]] = [["role": "system", "content": system]]
+            var messages: [[String: Any]] = [["role": "system", "content": system]]
             for turn in history {
                 messages.append(["role": "user", "content": turn.q])
                 messages.append(["role": "assistant", "content": turn.a])
             }
-            messages.append(["role": "user", "content": user])
+            // último mensaje: texto solo, o texto + imagen (data URI) si hay foto
+            if let imagePath, let dataURI = Self.imageDataURI(imagePath) {
+                messages.append(["role": "user", "content": [
+                    ["type": "text", "text": user],
+                    ["type": "image_url", "image_url": ["url": dataURI]],
+                ]])
+            } else {
+                messages.append(["role": "user", "content": user])
+            }
             let body: [String: Any] = [
                 "model": model,
                 "messages": messages,
