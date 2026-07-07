@@ -48,6 +48,10 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var lastOutputSnapshot = ""
     /// Comando en ejecución ahora mismo (exec recibido sin done todavía).
     private(set) var runningCommand: String?
+    /// Comando reanudable pendiente (claude --continue) tras una restauración.
+    private(set) var pendingResume: String?
+    private var resumeScheduled = false
+    private static var resumeStagger = 0
     var commandCount = 0
     var lastSummaryCount = 0
     var lastSummaryTime = Date.distantPast
@@ -191,18 +195,16 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         var startDir = restore?.cwd ?? (fallback == "/" ? NSHomeDirectory() : fallback)
         if !FileManager.default.fileExists(atPath: startDir) { startDir = NSHomeDirectory() }
 
+        // Si la sesión murió con un programa reanudable en marcha (claude...),
+        // se apunta como pendiente: NO se lanza aquí. Lanzar N claudes a la vez
+        // al restaurar reventaba la CPU; se reanuda solo al hacerse visible.
+        pendingResume = restore?.running.flatMap { Self.resumeCommand(for: $0) }
+
         let startShell: () -> Void = { [weak self] in
             guard let self else { return }
             self.view.startProcess(executable: "/bin/zsh", args: [],
                                    environment: self.shell.environment, execName: "-zsh",
                                    currentDirectory: startDir)
-            // Si la sesión murió con un programa reanudable en marcha (claude...),
-            // relanzarlo automáticamente para que la conversación siga su hilo.
-            if let running = restore?.running, let resume = Self.resumeCommand(for: running) {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-                    self?.send(resume + "\n")
-                }
-            }
         }
 
         if let replayData {
@@ -237,6 +239,26 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
                 self?.view.feed(byteArray: chunk[...])
                 if n == chunks.count - 1 { completion() }
             }
+        }
+    }
+
+    /// Reanuda el programa pendiente si la sesión está a la vista (pestaña
+    /// activa o panel visible). Escalonado para no arrancar varios a la vez.
+    func resumeIfPending() {
+        guard pendingResume != nil, !resumeScheduled else { return }
+        resumeScheduled = true
+        let delay = 2.5 + Double(Self.resumeStagger) * 3.0
+        Self.resumeStagger += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self else { return }
+            self.resumeScheduled = false
+            Self.resumeStagger = max(0, Self.resumeStagger - 1)
+            guard let cmd = self.pendingResume,
+                  self.view.superview != nil,
+                  self.view.window?.isVisible == true,
+                  !self.view.isHiddenOrHasHiddenAncestor else { return }
+            self.pendingResume = nil
+            self.send(cmd + "\n")
         }
     }
 

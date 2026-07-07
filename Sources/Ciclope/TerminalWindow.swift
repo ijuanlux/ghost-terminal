@@ -333,6 +333,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         window?.title = tabs[i].displayName
         window?.makeFirstResponder(tv)
         refreshSidebar()
+        tabs[i].resumeIfPending()
     }
 
     func closeTab(_ i: Int, terminateProcess: Bool = true) {
@@ -579,6 +580,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         sidePanes.append(pane)
         attach(pane, to: dock)
         pane.focus()
+        s.resumeIfPending()
         return pane
     }
 
