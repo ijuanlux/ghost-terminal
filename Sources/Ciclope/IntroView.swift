@@ -1,109 +1,175 @@
 import AppKit
 
-// Intro cinematográfica al arrancar: negro total, un prompt ❯ parpadeando,
-// Ghost aparece y suelta su "boo" con un glitch, y transición al título
-// GHOST TERMINAL antes de fundirse revelando el terminal. Click = saltar.
-final class IntroView: NSView {
+// Splash de arranque estilo app comercial: ventana flotante pequeña con fondo
+// blanco, Ghost aparece con un pop de muelle, suelta su "boo" en una píldora,
+// y transición al título ❯ GHOST TERMINAL con subrayado que se dibuja.
+// Click = saltar. Toggle en Ajustes.
+enum IntroSplash {
+    private static var window: NSWindow?
 
-    private let prompt = NSTextField(labelWithString: "❯")
-    private let ghost = NSImageView()
-    private let boo = NSTextField(labelWithString: "boo")
+    static func play() {
+        guard Prefs.showIntro, window == nil else { return }
+        let size = NSSize(width: 520, height: 300)
+        let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let rect = NSRect(x: screen.midX - size.width / 2,
+                          y: screen.midY - size.height / 2 + 40,
+                          width: size.width, height: size.height)
+        let w = NSWindow(contentRect: rect, styleMask: [.borderless], backing: .buffered, defer: false)
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.hasShadow = true
+        w.level = .floating
+        w.ignoresMouseEvents = false
+        let view = SplashView(frame: NSRect(origin: .zero, size: size))
+        view.onDone = { close() }
+        w.contentView = view
+        w.alphaValue = 0
+        window = w
+        w.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.3
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            w.animator().alphaValue = 1
+        }
+        view.run()
+    }
+
+    private static func close() {
+        guard let w = window else { return }
+        window = nil
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.45
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            w.animator().alphaValue = 0
+        }, completionHandler: {
+            w.orderOut(nil)
+        })
+    }
+}
+
+private final class SplashView: NSView {
+    var onDone: (() -> Void)?
+
+    private let card = NSView()
+    private let ghost = CyclopsView(frame: NSRect(origin: .zero, size: CyclopsView.spriteSize))
+    private let skipCatcher = SkipCatcher()
+    private let booPill = NSView()
+    private let booLabel = NSTextField(labelWithString: "boo")
     private let title = NSTextField(labelWithString: "")
-    private var blinkTimer: Timer?
+    private let underline = NSView()
+    private let subtitle = NSTextField(labelWithString: "")
     private var finished = false
 
-    /// Lanza la intro sobre la ventana (si está activada en Ajustes).
-    static func play(in window: NSWindow) {
-        guard Prefs.showIntro, let content = window.contentView else { return }
-        let intro = IntroView(frame: content.bounds)
-        intro.autoresizingMask = [.width, .height]
-        content.addSubview(intro, positioned: .above, relativeTo: nil)
-        intro.run()
-    }
+    private let ink = NSColor(srgbRed: 0.09, green: 0.09, blue: 0.11, alpha: 1)
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = NSColor.black.cgColor
 
-        let mono = NSFont.monospacedSystemFont(ofSize: 40, weight: .medium)
+        // tarjeta blanca redondeada
+        card.frame = bounds
+        card.wantsLayer = true
+        card.layer?.backgroundColor = NSColor.white.cgColor
+        card.layer?.cornerRadius = 16
+        addSubview(card)
 
-        prompt.font = mono
-        prompt.textColor = Theme.accent
-        prompt.alphaValue = 0
-
-        ghost.image = CyclopsView.spriteImage(pixel: 6)
-        ghost.imageScaling = .scaleNone
+        // Ghost VIVO: flota, parpadea y las cadenas ondean con su física
+        ghost.layer?.shadowColor = NSColor.black.cgColor
+        ghost.layer?.shadowOpacity = 0.15
+        ghost.layer?.shadowRadius = 9
+        ghost.layer?.shadowOffset = CGSize(width: 0, height: -3)
         ghost.alphaValue = 0
+        card.addSubview(ghost)
 
-        boo.font = NSFont.monospacedSystemFont(ofSize: 30, weight: .semibold)
-        boo.textColor = .white
-        boo.alphaValue = 0
+        // píldora "boo"
+        booPill.wantsLayer = true
+        booPill.layer?.backgroundColor = ink.cgColor
+        booPill.layer?.cornerRadius = 15
+        booPill.alphaValue = 0
+        booLabel.font = NSFont.monospacedSystemFont(ofSize: 16, weight: .bold)
+        booLabel.textColor = .white
+        booPill.addSubview(booLabel)
+        card.addSubview(booPill)
 
+        // título ❯ GHOST TERMINAL
         let t = NSMutableAttributedString(string: "❯ ", attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 34, weight: .bold),
+            .font: NSFont.monospacedSystemFont(ofSize: 26, weight: .bold),
             .foregroundColor: Theme.accent,
         ])
         t.append(NSAttributedString(string: "GHOST TERMINAL", attributes: [
-            .font: NSFont.monospacedSystemFont(ofSize: 34, weight: .bold),
-            .foregroundColor: NSColor.white,
-            .kern: 10,
+            .font: NSFont.monospacedSystemFont(ofSize: 26, weight: .bold),
+            .foregroundColor: ink,
+            .kern: 7,
         ]))
         title.attributedStringValue = t
         title.alphaValue = 0
+        card.addSubview(title)
 
-        for v in [prompt, ghost, boo, title] { addSubview(v) }
+        // subrayado de acento que se dibuja
+        underline.wantsLayer = true
+        underline.layer?.backgroundColor = Theme.accent.cgColor
+        underline.layer?.cornerRadius = 1.5
+        underline.alphaValue = 0
+        card.addSubview(underline)
+
+        // subtítulo
+        subtitle.stringValue = Prefs.language == "en"
+            ? "the terminal with a ghost inside"
+            : "el terminal con un fantasma dentro"
+        subtitle.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        subtitle.textColor = NSColor(white: 0.55, alpha: 1)
+        subtitle.alphaValue = 0
+        card.addSubview(subtitle)
+
+        layoutContent()
+
+        // capa transparente que captura el click para saltar la intro
+        skipCatcher.frame = bounds
+        skipCatcher.autoresizingMask = [.width, .height]
+        skipCatcher.onClick = { [weak self] in self?.finish() }
+        addSubview(skipCatcher, positioned: .above, relativeTo: card)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override func layout() {
-        super.layout()
+    private func layoutContent() {
         let c = NSPoint(x: bounds.midX, y: bounds.midY)
-        prompt.sizeToFit()
-        prompt.setFrameOrigin(NSPoint(x: c.x - prompt.frame.width / 2, y: c.y - prompt.frame.height / 2))
-        if let img = ghost.image {
-            ghost.frame = NSRect(x: c.x - img.size.width / 2, y: c.y - img.size.height / 2 + 14,
-                                 width: img.size.width, height: img.size.height)
-        }
-        boo.sizeToFit()
-        boo.setFrameOrigin(NSPoint(x: ghost.frame.maxX + 14, y: ghost.frame.midY + 8))
+        let gs = CyclopsView.spriteSize
+        ghost.setFrameOrigin(NSPoint(x: c.x - gs.width / 2, y: c.y - gs.height / 2 + 16))
+        booLabel.sizeToFit()
+        let pillW = booLabel.frame.width + 26
+        booPill.frame = NSRect(x: ghost.frame.maxX + 10, y: ghost.frame.midY + 16,
+                               width: pillW, height: 30)
+        booLabel.setFrameOrigin(NSPoint(x: 13, y: (30 - booLabel.frame.height) / 2))
+
         title.sizeToFit()
-        title.setFrameOrigin(NSPoint(x: c.x - title.frame.width / 2, y: c.y - title.frame.height / 2))
+        title.setFrameOrigin(NSPoint(x: c.x - title.frame.width / 2, y: c.y - 6))
+        underline.frame = NSRect(x: c.x, y: title.frame.minY - 10, width: 0, height: 3)
+        subtitle.sizeToFit()
+        subtitle.setFrameOrigin(NSPoint(x: c.x - subtitle.frame.width / 2,
+                                        y: underline.frame.minY - subtitle.frame.height - 12))
     }
 
-    private func run() {
-        layoutSubtreeIfNeeded()
+    // MARK: - Secuencia
 
-        // 1) prompt parpadeando en el vacío
-        blinkTimer = Timer.scheduledTimer(withTimeInterval: 0.32, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.prompt.alphaValue = self.prompt.alphaValue > 0.5 ? 0.15 : 1
-        }
-        RunLoop.main.add(blinkTimer!, forMode: .common)
-
-        // 2) aparece Ghost
-        after(0.9) {
-            self.blinkTimer?.invalidate()
-            self.fade(self.prompt, to: 0, duration: 0.2)
-            self.fade(self.ghost, to: 1, duration: 0.45)
-        }
-        // 3) boo + glitch
-        after(1.5) {
-            self.fade(self.boo, to: 1, duration: 0.12)
+    func run() {
+        after(0.25) { self.pop(self.ghost) }
+        after(0.95) {
+            self.pop(self.booPill)
             self.shake(self.ghost)
         }
-        // 4) transición al título
-        after(2.4) {
-            self.fade(self.ghost, to: 0, duration: 0.3)
-            self.fade(self.boo, to: 0, duration: 0.3)
+        after(2.1) {
+            self.fadeSlide(self.ghost, alpha: 0, dy: 14, duration: 0.35)
+            self.fadeSlide(self.booPill, alpha: 0, dy: 14, duration: 0.35)
         }
-        after(2.7) {
-            self.fade(self.title, to: 1, duration: 0.55)
-            self.drift(self.title, dy: 6, duration: 0.55)
+        after(2.45) {
+            self.fadeSlide(self.title, alpha: 1, dy: -10, duration: 0.5)
         }
-        // 5) fundido final revelando el terminal
-        after(4.1) { self.finish() }
+        after(2.75) {
+            self.drawUnderline()
+            self.fadeSlide(self.subtitle, alpha: 1, dy: -6, duration: 0.45)
+        }
+        after(4.4) { self.finish() }
     }
 
     private func after(_ s: TimeInterval, _ block: @escaping () -> Void) {
@@ -113,47 +179,68 @@ final class IntroView: NSView {
         }
     }
 
-    private func fade(_ v: NSView, to alpha: CGFloat, duration: TimeInterval) {
+    /// Pop con muelle: escala 0.4 → 1 con rebote, alrededor del centro.
+    private func pop(_ v: NSView) {
+        v.alphaValue = 1
+        guard let layer = v.layer else { return }
+        let center = CGPoint(x: v.frame.midX, y: v.frame.midY)
+        layer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+        layer.position = center
+        let spring = CASpringAnimation(keyPath: "transform.scale")
+        spring.fromValue = 0.4
+        spring.toValue = 1.0
+        spring.damping = 11
+        spring.stiffness = 320
+        spring.initialVelocity = 6
+        spring.duration = spring.settlingDuration
+        layer.add(spring, forKey: "pop")
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = 0
+        fade.toValue = 1
+        fade.duration = 0.18
+        layer.add(fade, forKey: "fadein")
+    }
+
+    private func fadeSlide(_ v: NSView, alpha: CGFloat, dy: CGFloat, duration: TimeInterval) {
+        let target = NSPoint(x: v.frame.origin.x, y: v.frame.origin.y + dy)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = duration
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             v.animator().alphaValue = alpha
+            v.animator().setFrameOrigin(target)
         }
     }
 
-    private func drift(_ v: NSView, dy: CGFloat, duration: TimeInterval) {
-        let target = v.frame.origin
-        v.setFrameOrigin(NSPoint(x: target.x, y: target.y - dy))
+    private func drawUnderline() {
+        underline.alphaValue = 1
+        let full = title.frame.width * 0.86
+        let x = bounds.midX - full / 2
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = duration
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            v.animator().setFrameOrigin(target)
+            ctx.duration = 0.5
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1)
+            underline.animator().frame = NSRect(x: x, y: underline.frame.minY,
+                                                width: full, height: 3)
         }
     }
 
     private func shake(_ v: NSView) {
         let origin = v.frame.origin
-        let offsets: [CGFloat] = [-4, 4, -2, 2, 0]
-        for (i, dx) in offsets.enumerated() {
-            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.05) {
+        for (i, dx) in [CGFloat(-3), 3, -2, 2, 0].enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.045) {
                 v.setFrameOrigin(NSPoint(x: origin.x + dx, y: origin.y))
             }
         }
     }
 
-    override func mouseDown(with event: NSEvent) {
-        finish()
-    }
-
     private func finish() {
         guard !finished else { return }
         finished = true
-        blinkTimer?.invalidate()
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.5
-            animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            self?.removeFromSuperview()
-        })
+        onDone?()
     }
+}
+
+/// Vista transparente que se come el click para saltar la intro.
+private final class SkipCatcher: NSView {
+    var onClick: (() -> Void)?
+    override func mouseDown(with event: NSEvent) { onClick?() }
 }
