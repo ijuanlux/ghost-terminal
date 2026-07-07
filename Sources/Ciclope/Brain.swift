@@ -387,6 +387,7 @@ final class Brain {
 
             // respuesta final (con o sin acción visible)
             self.setFace(.normal, for: 0)
+            Prefs.recordBooQuery(chars: userMsg.count + reply.count)
             s.chat.append((question, reply))
             if s.chat.count > 8 { s.chat.removeFirst(s.chat.count - 8) }
             if let script = fenced.body {

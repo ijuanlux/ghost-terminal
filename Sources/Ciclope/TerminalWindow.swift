@@ -199,6 +199,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     private var topRow: ThinSplitView?       // paneles en fila
     private var mainContainer: NSView!
     private var sidebar: TabSidebarView!
+    private let statusBar = StatusBarView(frame: .zero)
 
     private var tabs: [TerminalSession] = []
     private var activeIndex = 0
@@ -246,11 +247,16 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     // MARK: - Layout
 
     private func setupSidebar(in content: NSView) {
-        sidebar = TabSidebarView(frame: NSRect(x: 8, y: 8, width: 150,
-                                               height: content.bounds.height - 42))
+        sidebar = TabSidebarView(frame: NSRect(x: 8, y: 30, width: 150,
+                                               height: content.bounds.height - 64))
         sidebar.autoresizingMask = [.height]
         sidebar.isHidden = true
         content.addSubview(sidebar)
+
+        // barra de estado (ahorro de tokens) pegada abajo
+        statusBar.frame = NSRect(x: 0, y: 0, width: content.bounds.width, height: 24)
+        statusBar.autoresizingMask = [.width]
+        content.addSubview(statusBar)
 
         sidebar.onSelect = { [weak self] i in self?.selectTab(i) }
         sidebar.onCloseTab = { [weak self] i in self?.closeTab(i) }
@@ -275,9 +281,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     }
 
     private func setupSplits(in content: NSView) {
-        rootSplit = ThinSplitView(frame: NSRect(x: 8, y: 8,
+        rootSplit = ThinSplitView(frame: NSRect(x: 8, y: 30,
                                                 width: content.bounds.width - 16,
-                                                height: content.bounds.height - 42))
+                                                height: content.bounds.height - 64))
         rootSplit.autoresizingMask = [.width, .height]
         rootSplit.isVertical = true
         rootSplit.dividerStyle = .thin
@@ -487,9 +493,9 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         let showSidebar = tabs.count > 1
         sidebar.isHidden = !showSidebar
         let x: CGFloat = showSidebar ? 164 : 8
-        rootSplit.frame = NSRect(x: x, y: 8,
+        rootSplit.frame = NSRect(x: x, y: 30,
                                  width: content.bounds.width - x - 8,
-                                 height: content.bounds.height - 42)
+                                 height: content.bounds.height - 64)
     }
 
     private func setupCyclops(in content: NSView) {
@@ -814,6 +820,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         refreshSidebar()
         bubble.applyTheme()
         commandBubble.applyTheme()
+        statusBar.applyTheme()
         dropHint.layer?.backgroundColor = Theme.accent.withAlphaComponent(0.12).cgColor
         dropHint.layer?.borderColor = Theme.accent.withAlphaComponent(0.7).cgColor
         [rootSplit, centerSplit, mainPair, leftStack, topRow].forEach { $0?.needsDisplay = true }

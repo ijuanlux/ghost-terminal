@@ -38,6 +38,24 @@ enum Prefs {
         get { d.object(forKey: "ghost.actions") as? Bool ?? true }
         set { d.set(newValue, forKey: "ghost.actions") }
     }
+
+    // Contador de ahorro: consultas resueltas por boo (LLM local) que no
+    // fueron a Claude (nube de pago). Motiva a usar boo para lo simple.
+    static let statsChanged = Notification.Name("GhostStatsChanged")
+    static var booQueries: Int {
+        get { d.integer(forKey: "ghost.booQueries") }
+        set { d.set(newValue, forKey: "ghost.booQueries") }
+    }
+    /// Tokens estimados servidos en local (~4 chars/token de entrada+salida).
+    static var booTokensSaved: Int {
+        get { d.integer(forKey: "ghost.booTokens") }
+        set { d.set(newValue, forKey: "ghost.booTokens") }
+    }
+    static func recordBooQuery(chars: Int) {
+        booQueries += 1
+        booTokensSaved += max(1, chars / 4)
+        NotificationCenter.default.post(name: statsChanged, object: nil)
+    }
 }
 
 // Textos de la interfaz en español e inglés. La UI se construye por código,
@@ -85,6 +103,8 @@ enum L {
         "ctx.clear": "Limpiar pantalla",
         "ctx.finder": "Abrir carpeta en Finder",
         "restored": "── sesión restaurada ──",
+        "stats": "%d consultas resueltas por boo · ~%@ tokens en local (fuera de la nube)",
+        "stats.zero": "pregúntale a boo y ahorra tokens de nube para lo simple",
         "copied": "copiado ✓",
         "thinking": "a ver, dame un segundo...",
     ]
@@ -127,6 +147,8 @@ enum L {
         "ctx.clear": "Clear screen",
         "ctx.finder": "Reveal folder in Finder",
         "restored": "── session restored ──",
+        "stats": "%d queries handled by boo · ~%@ tokens run locally (off the cloud)",
+        "stats.zero": "ask boo and save cloud tokens on the simple stuff",
         "copied": "copied ✓",
         "thinking": "let me think for a sec...",
     ]
