@@ -94,21 +94,37 @@ final class Brain {
         }
     }
 
-    /// Extrae el primer bloque ```...``` (script) del texto; devuelve el resto.
+    private static let knownKinds: Set<String> = ["run", "read", "print", "zsh", "sh", "bash"]
+
+    /// Extrae el primer bloque ```...``` del texto. Robusto ante el modelo local:
+    /// la "kind" (run/read/print/zsh) puede venir como lenguaje del fence O como
+    /// primera línea suelta dentro del cuerpo ("```\nrun\nmdfind..."), y si la
+    /// primera palabra de esa línea es una kind conocida la usa igual.
     private static func extractFenced(_ text: String) -> (rest: String, lang: String, body: String?) {
         guard let start = text.range(of: "```") else { return (text, "", nil) }
         let afterStart = text[start.upperBound...]
         guard let end = afterStart.range(of: "```") else { return (text, "", nil) }
         var body = String(afterStart[..<end.lowerBound])
         var lang = ""
+        // 1) lenguaje del fence: primera palabra de la primera línea
         if let nl = body.firstIndex(of: "\n") {
-            let first = body[..<nl].trimmingCharacters(in: .whitespaces).lowercased()
-            if !first.isEmpty && !first.contains(" ") && first.count < 12 {
-                lang = first
+            let firstLine = body[..<nl].trimmingCharacters(in: .whitespaces).lowercased()
+            let firstWord = firstLine.split(separator: " ").first.map(String.init) ?? firstLine
+            if knownKinds.contains(firstWord) || (!firstLine.isEmpty && !firstLine.contains(" ") && firstLine.count < 12) {
+                lang = knownKinds.contains(firstWord) ? firstWord : firstLine
                 body = String(body[body.index(after: nl)...])
             }
         }
         body = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        // 2) si aún no hay kind, mira si la 1ª línea del cuerpo es una kind suelta
+        if lang.isEmpty, let nl = body.firstIndex(of: "\n") {
+            let firstWord = body[..<nl].trimmingCharacters(in: .whitespaces)
+                .split(separator: " ").first.map { String($0).lowercased() } ?? ""
+            if Self.knownKinds.contains(firstWord) {
+                lang = firstWord
+                body = String(body[body.index(after: nl)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
         let rest = (String(text[..<start.lowerBound]) + " " + String(afterStart[end.upperBound...]))
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return (rest, lang, body.isEmpty ? nil : body)
@@ -518,7 +534,10 @@ final class Brain {
                     ? (self.isEN ? "there you go, in the terminal" : "ahí lo tienes, en la terminal")
                     : fenced.rest
                 self.sayLLMReply(msg, holdFor: 10)
-            } else if let script = fenced.body {
+            } else if let script = fenced.body, ["zsh", "sh", "bash"].contains(fenced.lang) {
+                // SOLO se ejecuta como acción si está claramente etiquetado como
+                // shell; nunca ejecutamos bloques con etiqueta rara/desconocida
+                // (el modelo local produce basura y reventaba como script)
                 if Prefs.booActions && self.scriptIsSafe(script) {
                     self.runAction(script, on: s)
                     let msg = fenced.rest.isEmpty
@@ -529,15 +548,17 @@ final class Brain {
                     self.showScriptForReview(script)
                 }
             } else {
-                // respuesta de texto: al terminal si viene de leer un documento
-                // (forcePrint) o si es larga; corta y suelta va al bocadillo
-                let clean = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+                // respuesta de texto (o bloque de etiqueta desconocida que NO
+                // ejecutamos): al terminal si viene de leer un documento
+                // (forcePrint) o si es larga; corta y suelta va al bocadillo.
+                // Si había un bloque, usamos su contenido (sin las comillas).
+                let clean = (fenced.body ?? reply).trimmingCharacters(in: .whitespacesAndNewlines)
                 if forcePrint || clean.count > 220 {
                     self.printToTerminal(clean, on: s)
                     self.sayLLMReply(self.isEN ? "there you go, in the terminal" : "ahí lo tienes, en la terminal",
                                      holdFor: 8)
                 } else {
-                    self.sayLLMReply(reply, holdFor: 16)
+                    self.sayLLMReply(clean, holdFor: 16)
                 }
             }
         }

@@ -338,7 +338,13 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         }
         var chat: [(q: String, a: String)] = []
         for entry in (dict["chat"] as? [[String]]) ?? [] {
-            if entry.count == 2 { chat.append((entry[0], entry[1])) }
+            // saneado: descartar respuestas con bloques malformados (etiqueta con
+            // espacios tipo "```read fenced block") que envenenaban la memoria y
+            // hacían que el modelo repitiera su propio error en bucle
+            if entry.count == 2,
+               entry[1].range(of: #"```[a-z]* [a-z]"#, options: [.regularExpression, .caseInsensitive]) == nil {
+                chat.append((entry[0], entry[1]))
+            }
         }
         let running = (dict["running"] as? String).flatMap { $0.isEmpty ? nil : $0 }
         return SessionRestoreInfo(id: id, cwd: cwd, history: history, customName: name,
