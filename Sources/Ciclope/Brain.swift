@@ -365,6 +365,11 @@ final class Brain {
             }
             let fenced = Self.extractFenced(reply)
 
+            // tokens reales del modelo este salto (usage de LM Studio); si no
+            // los reporta, estimación por caracteres como último recurso
+            let t = LMStudio.shared.lastTokens
+            Prefs.addBooTokens(t > 0 ? t : (userMsg.count + reply.count) / 4)
+
             // bloque run: consultar la máquina en silencio y devolverle la salida
             if let body = fenced.body, fenced.lang == "run", hops < 3, Prefs.booActions {
                 guard self.runIsSafe(body) else {
@@ -387,7 +392,7 @@ final class Brain {
 
             // respuesta final (con o sin acción visible)
             self.setFace(.normal, for: 0)
-            Prefs.recordBooQuery(chars: userMsg.count + reply.count)
+            Prefs.countBooQuery()
             s.chat.append((question, reply))
             if s.chat.count > 8 { s.chat.removeFirst(s.chat.count - 8) }
             if let script = fenced.body {

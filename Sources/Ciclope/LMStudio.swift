@@ -9,6 +9,8 @@ final class LMStudio {
 
     /// Nombre del modelo cargado (para firmar las respuestas del LLM).
     var modelName: String? { cachedModel }
+    /// Tokens reales (prompt+completion) de la última respuesta, del campo usage.
+    private(set) var lastTokens = 0
     private var lastCheck = Date.distantPast
     private var lastAvailable = false
 
@@ -65,22 +67,32 @@ final class LMStudio {
                 "max_tokens": maxTokens,
             ]
             req.httpBody = try? JSONSerialization.data(withJSONObject: body)
-            URLSession.shared.dataTask(with: req) { data, _, _ in
+            URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
                 var text: String?
+                var tokens = 0
                 if let data,
-                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let choices = json["choices"] as? [[String: Any]],
-                   let msg = choices.first?["message"] as? [String: Any],
-                   var content = msg["content"] as? String {
-                    // limpiar razonamiento de modelos thinking y comillas
-                    if let r = content.range(of: "</think>") {
-                        content = String(content[r.upperBound...])
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    // tokens REALES que procesó el modelo (no una estimación)
+                    if let usage = json["usage"] as? [String: Any],
+                       let total = usage["total_tokens"] as? Int {
+                        tokens = total
                     }
-                    content = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                    content = content.trimmingCharacters(in: CharacterSet(charactersIn: "\"“”"))
-                    if !content.isEmpty { text = content }
+                    if let choices = json["choices"] as? [[String: Any]],
+                       let msg = choices.first?["message"] as? [String: Any],
+                       var content = msg["content"] as? String {
+                        // limpiar razonamiento de modelos thinking y comillas
+                        if let r = content.range(of: "</think>") {
+                            content = String(content[r.upperBound...])
+                        }
+                        content = content.trimmingCharacters(in: .whitespacesAndNewlines)
+                        content = content.trimmingCharacters(in: CharacterSet(charactersIn: "\"“”"))
+                        if !content.isEmpty { text = content }
+                    }
                 }
-                DispatchQueue.main.async { completion(text) }
+                DispatchQueue.main.async {
+                    self?.lastTokens = tokens
+                    completion(text)
+                }
             }.resume()
         }
     }

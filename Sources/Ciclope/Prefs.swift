@@ -51,9 +51,15 @@ enum Prefs {
         get { d.integer(forKey: "ghost.booTokens") }
         set { d.set(newValue, forKey: "ghost.booTokens") }
     }
-    static func recordBooQuery(chars: Int) {
+    /// Suma tokens procesados en local (exactos del usage de LM Studio, o
+    /// estimados por caracteres si el servidor no los reporta).
+    static func addBooTokens(_ n: Int) {
+        booTokensSaved += max(0, n)
+        NotificationCenter.default.post(name: statsChanged, object: nil)
+    }
+    /// Cuenta una consulta de usuario resuelta por boo (no los saltos internos).
+    static func countBooQuery() {
         booQueries += 1
-        booTokensSaved += max(1, chars / 4)
         NotificationCenter.default.post(name: statsChanged, object: nil)
     }
 }
