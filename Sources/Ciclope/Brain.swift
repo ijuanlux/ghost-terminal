@@ -114,6 +114,29 @@ final class Brain {
         return (rest, lang, body.isEmpty ? nil : body)
     }
 
+    /// Si el comando es en realidad "leer un documento" (cat/open/less/textutil...
+    /// sobre un pdf/docx/rtf/pages), devuelve la ruta del fichero para leerlo de
+    /// forma nativa. Extrae la ruta aunque tenga espacios sin comillar.
+    /// Si el bloque referencia un documento (pdf/docx/rtf...) que EXISTE en disco
+    /// y no es una acción de mover/copiar, devuelve la ruta para leerlo nativo.
+    /// Robusto ante el modelo local: da igual la etiqueta o si escribe basura,
+    /// mientras haya una ruta de documento real la leemos con PDFKit.
+    private static func docReadPath(in command: String) -> String? {
+        // si es una acción de mover/copiar/borrar, NO es una lectura
+        let lower = command.lowercased()
+        for verb in ["mv ", "cp ", "rsync", "rm ", "mkdir", "touch ", "> "] {
+            if lower.contains(verb) { return nil }
+        }
+        let pattern = #"/[^\n]*?\.(pdf|docx|doc|rtf|pages|odt|key|numbers|epub)\b"#
+        guard let re = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let m = re.firstMatch(in: command, range: NSRange(command.startIndex..., in: command)),
+              let r = Range(m.range, in: command) else { return nil }
+        var path = String(command[r]).replacingOccurrences(of: "\\ ", with: " ")
+            .replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\"", with: "")
+        path = path.trimmingCharacters(in: .whitespaces)
+        return FileManager.default.fileExists(atPath: path) ? path : nil
+    }
+
     /// Un comando de consulta silenciosa además no puede escribir nada.
     private func runIsSafe(_ cmd: String) -> Bool {
         guard scriptIsSafe(cmd) else { return false }
@@ -354,8 +377,8 @@ final class Brain {
         setFace(.thinking, for: 90)
         s.printStep(isEN ? "thinking..." : "pensando...")
         let instructions = isEN
-            ? "\n\n\(userName) asks: \(question)\nYou HAVE REAL ACCESS to this Mac, never say you cannot access files. Mechanisms: (1) to LOOK SOMETHING UP (find files, list, info) reply ONLY with a ```run fenced block``` containing one read-only command (mdfind, find, ls, du, file, mdls...) and you will receive its output; to READ A DOCUMENT (pdf, docx, txt, md...) reply ONLY with a ```read fenced block``` containing just the file path and you will get its extracted text (NEVER cat a pdf/binary); (2) to SHOW content in the terminal (a table, a summary of a document, a long list, a description) reply with an optional short sentence plus a ```print fenced block``` whose content is dumped verbatim into the terminal (use plain text, aligned columns or markdown-ish tables); (3) to PERFORM a side-effecting action (open, move, organize, create) reply with one short sentence plus a ```zsh fenced block``` (mkdir -p, mv, cp, mdfind, open; NEVER delete, move instead; use $HOME). Short chat answers go in the bubble; use print for anything long or formatted. Reply in the language of the question."
-            : "\n\nPregunta de \(userName): \(question)\nTIENES ACCESO REAL a este Mac, nunca digas que no puedes acceder a los ficheros. Mecanismos: (1) para CONSULTAR algo (buscar ficheros, listar, info) responde SOLO con un bloque cercado ```run``` con un comando de solo lectura (mdfind, find, ls, du, file, mdls...) y recibirás su salida; para LEER UN DOCUMENTO (pdf, docx, txt, md...) responde SOLO con un bloque ```read``` que contenga solo la ruta del fichero y recibirás su texto extraído (NUNCA hagas cat de un pdf/binario); (2) para MOSTRAR contenido en la terminal (una tabla, el resumen de un documento, un listado largo, una descripción) responde con una frase corta opcional más un bloque ```print``` cuyo contenido se vuelca tal cual en la terminal (texto plano, columnas alineadas o tablas estilo markdown); (3) para REALIZAR una acción con efectos (abrir, mover, organizar, crear) responde una frase corta más un bloque ```zsh``` (mkdir -p, mv, cp, mdfind, open; NUNCA borres, mueve en su lugar; usa $HOME). Las respuestas cortas de charla van en el bocadillo; usa print para lo largo o formateado. Responde en el idioma de la pregunta."
+            ? "\n\n\(userName) asks: \(question)\nYou HAVE REAL ACCESS to this Mac, never say you cannot access files. Mechanisms: (1) to LOOK SOMETHING UP (find files, list, info) reply ONLY with a ```run``` block containing one read-only command (mdfind, find, ls, du, file, mdls...) and you will receive its output; to READ A DOCUMENT (pdf, docx, txt, md...) reply ONLY with a ```read``` block containing just the file path and you will get its extracted text (NEVER cat a pdf/binary); (2) to SHOW content in the terminal (a table, a summary of a document, a long list, a description) reply with an optional short sentence plus a ```print``` block whose content is dumped verbatim into the terminal (use plain text, aligned columns or markdown-ish tables); (3) to PERFORM a side-effecting action (open, move, organize, create) reply with one short sentence plus a ```zsh``` block (mkdir -p, mv, cp, mdfind, open; NEVER delete, move instead; use $HOME). Short chat answers go in the bubble; use print for anything long or formatted. Reply in the language of the question."
+            : "\n\nPregunta de \(userName): \(question)\nTIENES ACCESO REAL a este Mac, nunca digas que no puedes acceder a los ficheros. Mecanismos: (1) para CONSULTAR algo (buscar ficheros, listar, info) responde SOLO con un ```run``` con un comando de solo lectura (mdfind, find, ls, du, file, mdls...) y recibirás su salida; para LEER UN DOCUMENTO (pdf, docx, txt, md...) responde SOLO con un ```read``` que contenga solo la ruta del fichero y recibirás su texto extraído (NUNCA hagas cat de un pdf/binario); (2) para MOSTRAR contenido en la terminal (una tabla, el resumen de un documento, un listado largo, una descripción) responde con una frase corta opcional más un bloque ```print``` cuyo contenido se vuelca tal cual en la terminal (texto plano, columnas alineadas o tablas estilo markdown); (3) para REALIZAR una acción con efectos (abrir, mover, organizar, crear) responde una frase corta más un ```zsh``` (mkdir -p, mv, cp, mdfind, open; NUNCA borres, mueve en su lugar; usa $HOME). Las respuestas cortas de charla van en el bocadillo; usa print para lo largo o formateado. Responde en el idioma de la pregunta."
         hop(s, question: question, userMsg: context(for: s) + imageNote(s) + instructions,
             loopHist: [], hops: 0, image: s.pendingImage)
         s.pendingImage = nil
@@ -383,7 +406,8 @@ final class Brain {
     }
 
     private func hop(_ s: TerminalSession, question: String, userMsg: String,
-                     loopHist: [(q: String, a: String)], hops: Int, image: String? = nil) {
+                     loopHist: [(q: String, a: String)], hops: Int, image: String? = nil,
+                     forcePrint: Bool = false) {
         LMStudio.shared.chat(
             system: persona,
             history: Array(s.chat.suffix(6)) + loopHist,
@@ -406,10 +430,23 @@ final class Brain {
             Prefs.addBooTokens(t > 0 ? t : (userMsg.count + reply.count) / 4)
 
             // bloque read: extraer texto de un documento de forma NATIVA (PDFKit
-            // etc.), sin cat de binarios. Rápido y limpio.
-            if let body = fenced.body, fenced.lang == "read", hops < 3 {
-                let path = body.trimmingCharacters(in: .whitespacesAndNewlines)
-                    .replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\"", with: "")
+            // etc.), sin cat de binarios. También se intercepta aquí cualquier
+            // run/zsh que en realidad intente LEER un documento (cat/open/less
+            // sobre un pdf/docx...): el modelo local se equivoca de bloque y las
+            // rutas con espacios le revientan, así que lo desviamos a lo nativo.
+            let readPath: String? = {
+                guard let b = fenced.body else { return nil }
+                // etiqueta read con ruta limpia
+                if fenced.lang == "read" {
+                    let p = b.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .replacingOccurrences(of: "'", with: "").replacingOccurrences(of: "\"", with: "")
+                    if FileManager.default.fileExists(atPath: p) { return p }
+                }
+                // cualquier bloque (etiqueta incorrecta, basura del modelo, cat/open):
+                // si contiene la ruta de un documento real, lo leemos nativo
+                return Self.docReadPath(in: b)
+            }()
+            if let path = readPath, hops < 3 {
                 self.say(self.pickL(
                     ["leyendo los espíritus de este documento...",
                      "invocando lo que dice este papel...",
@@ -420,15 +457,19 @@ final class Brain {
                 self.setFace(.reading, for: 60)
                 s.printStep((self.isEN ? "reading " : "leyendo ") + (path as NSString).lastPathComponent)
                 DispatchQueue.global(qos: .userInitiated).async {
-                    let text = DocReader.text(path) ?? "(no pude leer el documento)"
+                    let text = DocReader.text(path)
+                        ?? (self.isEN ? "(could not read the document)" : "(no pude leer el documento)")
                     DispatchQueue.main.async {
                         let next = (self.isEN ? "Text of the document:\n" : "Texto del documento:\n")
                             + String(text.prefix(6000))
                             + (self.isEN
                                 ? "\n\nNow answer the user. To show a summary/table in the terminal use ```print```."
                                 : "\n\nAhora responde al usuario. Para mostrar un resumen/tabla en la terminal usa ```print```.")
+                        // tras leer un documento, la respuesta final va al
+                        // terminal sí o sí (resumen/análisis suele ser largo)
                         self.hop(s, question: question, userMsg: next,
-                                 loopHist: loopHist + [(userMsg, reply)], hops: hops + 1)
+                                 loopHist: loopHist + [(userMsg, reply)], hops: hops + 1,
+                                 forcePrint: true)
                     }
                 }
                 return
@@ -450,7 +491,8 @@ final class Brain {
                             ? "\n\nContinue: answer the user, look up more with ```run```, read a document with ```read```, or act with ```zsh```."
                             : "\n\nContinúa: responde al usuario, consulta más con ```run```, lee un documento con ```read```, o actúa con ```zsh```.")
                     self.hop(s, question: question, userMsg: next,
-                             loopHist: loopHist + [(userMsg, reply)], hops: hops + 1)
+                             loopHist: loopHist + [(userMsg, reply)], hops: hops + 1,
+                             forcePrint: forcePrint)
                 }
                 return
             }
@@ -459,8 +501,14 @@ final class Brain {
             self.setFace(.normal, for: 0)
             s.printStep((self.isEN ? "done" : "listo") + "\r\n")
             Prefs.countBooQuery()
-            s.chat.append((question, reply))
-            if s.chat.count > 8 { s.chat.removeFirst(s.chat.count - 8) }
+            // guardar en memoria solo respuestas limpias: si trae un bloque
+            // malformado (etiqueta con espacios tipo "read fenced block"), NO se
+            // guarda, o gemma se envenena repitiendo su propio error en bucle
+            let malformed = reply.range(of: #"```[a-z]* [a-z]"#, options: [.regularExpression, .caseInsensitive]) != nil
+            if !malformed {
+                s.chat.append((question, reply))
+                if s.chat.count > 8 { s.chat.removeFirst(s.chat.count - 8) }
+            }
 
             // bloque print: volcar contenido formateado (tabla, resumen, listado,
             // descripción) EN el terminal, no en el bocadillo
@@ -481,11 +529,10 @@ final class Brain {
                     self.showScriptForReview(script)
                 }
             } else {
-                // respuesta de texto: si es larga (resumen, explicación), al
-                // terminal aunque el modelo olvidara el bloque print; si es
-                // corta, al bocadillo como siempre
+                // respuesta de texto: al terminal si viene de leer un documento
+                // (forcePrint) o si es larga; corta y suelta va al bocadillo
                 let clean = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-                if clean.count > 220 {
+                if forcePrint || clean.count > 220 {
                     self.printToTerminal(clean, on: s)
                     self.sayLLMReply(self.isEN ? "there you go, in the terminal" : "ahí lo tienes, en la terminal",
                                      holdFor: 8)
