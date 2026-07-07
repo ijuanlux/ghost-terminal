@@ -24,12 +24,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.openSettings(nil)
             }
         }
+        // la intro va PRIMERO; las ventanas nacen cuando empieza a fundirse
+        IntroSplash.play { [weak self] in
+            self?.bootWindows()
+        }
+    }
+
+    /// Crea o restaura las ventanas de terminal (tras la intro).
+    private func bootWindows() {
         if restoreState() {
-            IntroSplash.play()
             return
         }
         let wc = openWindow(greet: true)
-        IntroSplash.play()
         // hooks de pruebas: CICLOPE_TEST_TABS=N / CICLOPE_TEST_PANES=N al arrancar
         let env = ProcessInfo.processInfo.environment
         if let n = Int(env["CICLOPE_TEST_TABS"] ?? ""), n > 0 {

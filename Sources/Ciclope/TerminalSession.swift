@@ -128,7 +128,10 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         view.getTerminal().setCursorStyle(.blinkBlock)
         view.changeScrollback(10000)
 
-        // restaurar sesión anterior: memoria de Ghost + scrollback con colores
+        // restaurar sesión anterior: memoria de Ghost + scrollback con colores.
+        // El replay NO se hace aquí de golpe: 256KB de ANSI síncronos por sesión
+        // clavaban la CPU y congelaban la app al arrancar. Se trocea más abajo.
+        var replayData: [UInt8]? = nil
         if let restore {
             history = restore.history
             chat = restore.chat
@@ -136,16 +139,7 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
             customName = restore.customName
             currentDirectory = restore.cwd
             if let data = try? Data(contentsOf: logURL), !data.isEmpty {
-                let tail = [UInt8](data.suffix(262_144))
-                view.feed(byteArray: tail[...])
-                // Saneado: el log puede dejar el terminal en modos que activó la app
-                // anterior (claude, vim...). Apagar TODO antes de seguir: ratón
-                // (1000/1002/1003 + encodings 1006/1015), focus reporting (1004),
-                // bracketed paste (2004), pantalla alternativa (1049), cursor visible,
-                // teclado normal, atributos limpios y cursor abajo del todo.
-                let sanitize = "\u{1B}[?1000l\u{1B}[?1002l\u{1B}[?1003l\u{1B}[?1006l\u{1B}[?1015l"
-                    + "\u{1B}[?1004l\u{1B}[?2004l\u{1B}[?1049l\u{1B}[?25h\u{1B}>\u{1B}[0m"
-                view.feed(text: sanitize + "\u{1B}[999;1H\r\n\u{1B}[2m" + L.t("restored") + "\u{1B}[0m\r\n")
+                replayData = [UInt8](data.suffix(98_304))
             }
         } else {
             try? FileManager.default.removeItem(at: logURL)
@@ -196,15 +190,52 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         let fallback = FileManager.default.currentDirectoryPath
         var startDir = restore?.cwd ?? (fallback == "/" ? NSHomeDirectory() : fallback)
         if !FileManager.default.fileExists(atPath: startDir) { startDir = NSHomeDirectory() }
-        view.startProcess(executable: "/bin/zsh", args: [],
-                          environment: shell.environment, execName: "-zsh",
-                          currentDirectory: startDir)
 
-        // Si la sesión murió con un programa reanudable en marcha (claude...),
-        // relanzarlo automáticamente para que la conversación siga su hilo.
-        if let running = restore?.running, let resume = Self.resumeCommand(for: running) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-                self?.send(resume + "\n")
+        let startShell: () -> Void = { [weak self] in
+            guard let self else { return }
+            self.view.startProcess(executable: "/bin/zsh", args: [],
+                                   environment: self.shell.environment, execName: "-zsh",
+                                   currentDirectory: startDir)
+            // Si la sesión murió con un programa reanudable en marcha (claude...),
+            // relanzarlo automáticamente para que la conversación siga su hilo.
+            if let running = restore?.running, let resume = Self.resumeCommand(for: running) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    self?.send(resume + "\n")
+                }
+            }
+        }
+
+        if let replayData {
+            // replay troceado y asíncrono: la UI respira y no se clava la CPU
+            replayLog(replayData) { [weak self] in
+                guard let self else { return }
+                // Saneado: el log puede dejar el terminal en modos que activó la
+                // app anterior (claude, vim...): ratón, focus, bracketed paste,
+                // alt screen, cursor oculto, teclado en modo aplicación.
+                let sanitize = "\u{1B}[?1000l\u{1B}[?1002l\u{1B}[?1003l\u{1B}[?1006l\u{1B}[?1015l"
+                    + "\u{1B}[?1004l\u{1B}[?2004l\u{1B}[?1049l\u{1B}[?25h\u{1B}>\u{1B}[0m"
+                self.view.feed(text: sanitize + "\u{1B}[999;1H\r\n\u{1B}[2m" + L.t("restored") + "\u{1B}[0m\r\n")
+                startShell()
+            }
+        } else {
+            startShell()
+        }
+    }
+
+    /// Reproduce el log en chunks de 16KB espaciados para no bloquear el main thread.
+    private func replayLog(_ data: [UInt8], completion: @escaping () -> Void) {
+        let chunkSize = 16_384
+        var chunks: [[UInt8]] = []
+        var i = 0
+        while i < data.count {
+            chunks.append(Array(data[i..<min(i + chunkSize, data.count)]))
+            i += chunkSize
+        }
+        guard !chunks.isEmpty else { completion(); return }
+        for (n, chunk) in chunks.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(n) * 0.03) { [weak self] in
+                self?.view.feed(byteArray: chunk[...])
+                if n == chunks.count - 1 { completion() }
             }
         }
     }

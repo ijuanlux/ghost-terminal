@@ -6,9 +6,16 @@ import AppKit
 // Click = saltar. Toggle en Ajustes.
 enum IntroSplash {
     private static var window: NSWindow?
+    private static var onFinish: (() -> Void)?
 
-    static func play() {
-        guard Prefs.showIntro, window == nil else { return }
+    /// Muestra la splash y llama a completion cuando empieza a fundirse
+    /// (o inmediatamente si la intro está desactivada).
+    static func play(completion: (() -> Void)? = nil) {
+        guard Prefs.showIntro, window == nil else {
+            completion?()
+            return
+        }
+        onFinish = completion
         let size = NSSize(width: 520, height: 300)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let rect = NSRect(x: screen.midX - size.width / 2,
@@ -37,6 +44,8 @@ enum IntroSplash {
     private static func close() {
         guard let w = window else { return }
         window = nil
+        onFinish?()
+        onFinish = nil
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.45
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
