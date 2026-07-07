@@ -27,7 +27,7 @@ final class TerminalPane: NSView {
             grip.topAnchor.constraint(equalTo: topAnchor),
             grip.leadingAnchor.constraint(equalTo: leadingAnchor),
             grip.trailingAnchor.constraint(equalTo: trailingAnchor),
-            grip.heightAnchor.constraint(equalToConstant: 22),
+            grip.heightAnchor.constraint(equalToConstant: 26),
             session.view.topAnchor.constraint(equalTo: grip.bottomAnchor),
             session.view.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             session.view.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
@@ -88,28 +88,55 @@ final class GripBar: NSView {
         label.translatesAutoresizingMaskIntoConstraints = false
         addSubview(label)
 
+        // botón de cierre: área tappable amplia (22x22) con ✕ visible y
+        // resaltado rojo al pasar el ratón, para que no cueste acertar
         closeButton.isBordered = false
-        closeButton.font = NSFont.systemFont(ofSize: 10)
+        closeButton.font = NSFont.systemFont(ofSize: 13, weight: .medium)
         closeButton.contentTintColor = Theme.dimFg
         closeButton.target = self
         closeButton.action = #selector(closeTapped)
+        closeButton.wantsLayer = true
+        closeButton.layer?.cornerRadius = 5
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         addSubview(closeButton)
 
         NSLayoutConstraint.activate([
-            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            dot.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 9),
             dot.centerYAnchor.constraint(equalTo: centerYAnchor),
             dot.widthAnchor.constraint(equalToConstant: 6),
             dot.heightAnchor.constraint(equalToConstant: 6),
-            label.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 6),
+            label.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 7),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
             label.trailingAnchor.constraint(lessThanOrEqualTo: closeButton.leadingAnchor, constant: -6),
-            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
+            closeButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
             closeButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            closeButton.widthAnchor.constraint(equalToConstant: 22),
+            closeButton.heightAnchor.constraint(equalToConstant: 22),
         ])
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private var closeHover: NSTrackingArea?
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let closeHover { removeTrackingArea(closeHover) }
+        let area = NSTrackingArea(rect: closeButton.frame,
+                                  options: [.mouseEnteredAndExited, .activeAlways],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        closeHover = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        closeButton.layer?.backgroundColor = NSColor(srgbRed: 0.9, green: 0.25, blue: 0.25, alpha: 0.9).cgColor
+        closeButton.contentTintColor = .white
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        closeButton.layer?.backgroundColor = NSColor.clear.cgColor
+        closeButton.contentTintColor = Theme.dimFg
+    }
 
     func applyTheme() {
         layer?.backgroundColor = Theme.chromeBg.cgColor

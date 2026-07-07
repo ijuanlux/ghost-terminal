@@ -194,26 +194,44 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         let fallback = FileManager.default.currentDirectoryPath
         var startDir = restore?.cwd ?? (fallback == "/" ? NSHomeDirectory() : fallback)
         if !FileManager.default.fileExists(atPath: startDir) { startDir = NSHomeDirectory() }
+        pendingStartDir = startDir
+        pendingReplay = replayData
 
         // Si la sesión murió con un programa reanudable en marcha (claude...),
         // se apunta como pendiente: NO se lanza aquí. Lanzar N claudes a la vez
         // al restaurar reventaba la CPU; se reanuda solo al hacerse visible.
         pendingResume = restore?.running.flatMap { Self.resumeCommand(for: $0) }
 
+        // El replay y el shell se activan cuando la vista tiene su TAMAÑO REAL:
+        // reproducir con el ancho inicial (400px) partía mal las líneas del
+        // scrollback restaurado (se veía roto, sobre todo en splits).
+        view.onReady = { [weak self] in self?.activate() }
+        // fallback por si nunca llega layout (pestaña de fondo): activar igual
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.activate()
+        }
+    }
+
+    private var pendingReplay: [UInt8]?
+    private var pendingStartDir = ""
+    private var activated = false
+
+    /// Reproduce el scrollback (ya con el ancho real) y arranca el shell. Una vez.
+    private func activate() {
+        guard !activated else { return }
+        activated = true
+        view.onReady = nil
+
         let startShell: () -> Void = { [weak self] in
             guard let self else { return }
             self.view.startProcess(executable: "/bin/zsh", args: [],
                                    environment: self.shell.environment, execName: "-zsh",
-                                   currentDirectory: startDir)
+                                   currentDirectory: self.pendingStartDir)
         }
-
-        if let replayData {
-            // replay troceado y asíncrono: la UI respira y no se clava la CPU
+        if let replayData = pendingReplay {
+            pendingReplay = nil
             replayLog(replayData) { [weak self] in
                 guard let self else { return }
-                // Saneado: el log puede dejar el terminal en modos que activó la
-                // app anterior (claude, vim...): ratón, focus, bracketed paste,
-                // alt screen, cursor oculto, teclado en modo aplicación.
                 let sanitize = "\u{1B}[?1000l\u{1B}[?1002l\u{1B}[?1003l\u{1B}[?1006l\u{1B}[?1015l"
                     + "\u{1B}[?1004l\u{1B}[?2004l\u{1B}[?1049l\u{1B}[?25h\u{1B}>\u{1B}[0m"
                 self.view.feed(text: sanitize + "\u{1B}[999;1H\r\n\u{1B}[2m" + L.t("restored") + "\u{1B}[0m\r\n")

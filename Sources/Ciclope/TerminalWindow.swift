@@ -6,8 +6,20 @@ import SwiftTerm
 final class CiclopeTerminalView: LocalProcessTerminalView {
     var onOutput: ((ArraySlice<UInt8>) -> Void)?
     weak var session: TerminalSession?
+    /// Se dispara una vez cuando la vista ya tiene su ancho real (>420px): el
+    /// replay del scrollback necesita el tamaño definitivo para no partir líneas.
+    var onReady: (() -> Void)?
 
     private let ghostScroller = GhostScrollBar()
+
+    override func layout() {
+        super.layout()
+        if onReady != nil, bounds.width > 420 {
+            let cb = onReady
+            onReady = nil
+            cb?()
+        }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
