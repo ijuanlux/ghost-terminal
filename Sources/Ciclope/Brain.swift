@@ -95,21 +95,69 @@ final class Brain {
     }
 
     /// Extrae el primer bloque ```...``` (script) del texto; devuelve el resto.
-    private static func extractScript(_ text: String) -> (rest: String, script: String?) {
-        guard let start = text.range(of: "```") else { return (text, nil) }
+    private static func extractFenced(_ text: String) -> (rest: String, lang: String, body: String?) {
+        guard let start = text.range(of: "```") else { return (text, "", nil) }
         let afterStart = text[start.upperBound...]
-        guard let end = afterStart.range(of: "```") else { return (text, nil) }
-        var script = String(afterStart[..<end.lowerBound])
-        if let nl = script.firstIndex(of: "\n") {
-            let lang = script[..<nl].trimmingCharacters(in: .whitespaces).lowercased()
-            if ["zsh", "bash", "sh", "shell", ""].contains(lang) {
-                script = String(script[script.index(after: nl)...])
+        guard let end = afterStart.range(of: "```") else { return (text, "", nil) }
+        var body = String(afterStart[..<end.lowerBound])
+        var lang = ""
+        if let nl = body.firstIndex(of: "\n") {
+            let first = body[..<nl].trimmingCharacters(in: .whitespaces).lowercased()
+            if !first.isEmpty && !first.contains(" ") && first.count < 12 {
+                lang = first
+                body = String(body[body.index(after: nl)...])
             }
         }
-        script = script.trimmingCharacters(in: .whitespacesAndNewlines)
+        body = body.trimmingCharacters(in: .whitespacesAndNewlines)
         let rest = (String(text[..<start.lowerBound]) + " " + String(afterStart[end.upperBound...]))
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        return (rest, script.isEmpty ? nil : script)
+        return (rest, lang, body.isEmpty ? nil : body)
+    }
+
+    /// Un comando de consulta silenciosa además no puede escribir nada.
+    private func runIsSafe(_ cmd: String) -> Bool {
+        guard scriptIsSafe(cmd) else { return false }
+        let writes = #"[>]|\bmv\b|\bcp\b|\bmkdir\b|\btouch\b|\bchmod\b|\bchown\b|\bln\b|\bopen\b"#
+        return cmd.range(of: writes, options: .regularExpression) == nil
+    }
+
+    /// Ejecuta un comando en silencio (fuera del terminal) y captura su salida.
+    private static func execQuiet(_ cmd: String, completion: @escaping (String) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            proc.arguments = ["-c", cmd]
+            let pipe = Pipe()
+            proc.standardOutput = pipe
+            proc.standardError = pipe
+            var out = ""
+            do {
+                try proc.run()
+                let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+                DispatchQueue.global().asyncAfter(deadline: .now() + 12, execute: killer)
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                killer.cancel()
+                out = String(data: data, encoding: .utf8) ?? ""
+            } catch {
+                out = "error: \(error.localizedDescription)"
+            }
+            if out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { out = "(sin salida)" }
+            DispatchQueue.main.async { completion(out) }
+        }
+    }
+
+    /// Enseña un script vetado en el bocadillo, sin ejecutarlo.
+    private func showScriptForReview(_ script: String) {
+        DispatchQueue.main.async {
+            self.setFace(.normal, for: 0)
+            self.commandBubble?.anchor = self.cyclops
+            self.commandBubble?.say(script, holdFor: 40)
+            self.bubble?.anchor = self.commandBubble
+            self.bubble?.say(self.isEN
+                ? "this one needs your hand, I will not run it myself"
+                : "esto pide tu mano, no lo ejecuto yo solo", holdFor: 16)
+        }
     }
 
     /// Un script solo se auto-ejecuta si no borra ni toca nada delicado.
@@ -291,43 +339,68 @@ final class Brain {
         }
         say(L.t("thinking"), holdFor: 90)
         setFace(.thinking, for: 90)
+        let instructions = isEN
+            ? "\n\n\(userName) asks: \(question)\nYou HAVE REAL ACCESS to this Mac, never say you cannot access files. Two mechanisms: (1) to LOOK SOMETHING UP (find files, list, read info) reply ONLY with a ```run fenced block``` containing one read-only command (mdfind, find, ls, du, file, head...) and you will receive its output; (2) to PERFORM a visible action (open, move, organize, create) reply with one short sentence plus a ```zsh fenced block``` (mkdir -p, mv, cp, mdfind, open; NEVER delete, move instead; use $HOME). If it is just conversation, answer normally; suggested commands go in backticks `like this`. Reply in the language of the question."
+            : "\n\nPregunta de \(userName): \(question)\nTIENES ACCESO REAL a este Mac, nunca digas que no puedes acceder a los ficheros. Dos mecanismos: (1) para CONSULTAR algo (buscar ficheros, listar, leer info) responde SOLO con un bloque cercado ```run``` con un comando de solo lectura (mdfind, find, ls, du, file, head...) y recibirás su salida; (2) para REALIZAR una acción visible (abrir, mover, organizar, crear) responde una frase corta más un bloque ```zsh``` (mkdir -p, mv, cp, mdfind, open; NUNCA borres, mueve en su lugar; usa $HOME). Si es solo conversación, responde normal; comandos sugeridos entre backticks `así`. Responde en el idioma de la pregunta."
+        hop(s, question: question, userMsg: context(for: s) + instructions, loopHist: [], hops: 0)
+    }
+
+    /// Un salto del bucle agéntico: el LLM puede pedir comandos de consulta
+    /// (bloque run, ejecutados en silencio, salida de vuelta, máx 3 saltos)
+    /// antes de responder o de lanzar una acción visible.
+    private func hop(_ s: TerminalSession, question: String, userMsg: String,
+                     loopHist: [(q: String, a: String)], hops: Int) {
         LMStudio.shared.chat(
             system: persona,
-            history: Array(s.chat.suffix(6)),
-            user: context(for: s) + (isEN
-                ? "\n\n\(userName) asks: \(question)\nAnswer helpfully and directly. If your answer includes a suggested command, wrap it in backticks like `this`. If they ask you to PERFORM an action (organize files, find and open a document, create folders...), reply with one short sentence plus a complete zsh script in a ```zsh fenced block```. Script rules: use mkdir -p, mv, cp, mdfind, open, ls; NEVER delete anything (no rm), move instead; use $HOME for paths. Reply in the same language the question is written in."
-                : "\n\nPregunta de \(userName): \(question)\nRespóndele útil y directo. Si sugieres un comando, escríbelo entre backticks `así`. Si te pide REALIZAR una acción (organizar ficheros, buscar y abrir un documento, crear carpetas...), responde con una frase corta más un script zsh completo en un bloque cercado ```zsh```. Reglas del script: usa mkdir -p, mv, cp, mdfind, open, ls; NUNCA borres nada (nada de rm), mueve en su lugar; usa $HOME en las rutas. Responde en el mismo idioma de la pregunta."),
-            maxTokens: 550
+            history: Array(s.chat.suffix(6)) + loopHist,
+            user: userMsg,
+            maxTokens: 600
         ) { [weak self] reply in
-            self?.setFace(.normal, for: 0)
-            if let reply {
-                s.chat.append((question, reply))
-                if s.chat.count > 8 { s.chat.removeFirst(s.chat.count - 8) }
-                let (rest, script) = Self.extractScript(reply)
-                if let script, let self {
-                    if Prefs.booActions && self.scriptIsSafe(script) {
-                        self.runAction(script, on: s)
-                        let msg = rest.isEmpty
-                            ? (self.isEN ? "on it, watch the terminal" : "voy, mira la terminal")
-                            : rest
-                        self.sayLLMReply(msg, holdFor: 12)
-                    } else {
-                        // script vetado o acciones apagadas: enseñar, no ejecutar
-                        DispatchQueue.main.async {
-                            self.commandBubble?.anchor = self.cyclops
-                            self.commandBubble?.say(script, holdFor: 40)
-                            self.bubble?.anchor = self.commandBubble
-                            self.bubble?.say(self.isEN
-                                ? "this one needs your hand, I will not run it myself"
-                                : "esto pide tu mano, no lo ejecuto yo solo", holdFor: 16)
-                        }
-                    }
+            guard let self else { return }
+            guard let reply else {
+                self.setFace(.normal, for: 0)
+                let off = self.isEN ? "LM Studio is off, turn it on and I will check" : "LM Studio está apagado, enciéndelo y te lo miro"
+                self.say(off, holdFor: 14)
+                return
+            }
+            let fenced = Self.extractFenced(reply)
+
+            // bloque run: consultar la máquina en silencio y devolverle la salida
+            if let body = fenced.body, fenced.lang == "run", hops < 3, Prefs.booActions {
+                guard self.runIsSafe(body) else {
+                    self.showScriptForReview(body)
+                    return
+                }
+                self.say(self.isEN ? "let me look..." : "déjame mirar...", holdFor: 60)
+                self.setFace(.thinking, for: 60)
+                Self.execQuiet(body) { output in
+                    let next = (self.isEN ? "Output of `\(body)`:\n" : "Salida de `\(body)`:\n")
+                        + String(output.prefix(1800))
+                        + (self.isEN
+                            ? "\n\nContinue: answer the user with what you found, request another lookup with ```run```, or perform a visible action with ```zsh```."
+                            : "\n\nContinúa: responde al usuario con lo que has encontrado, pide otra consulta con ```run```, o haz una acción visible con ```zsh```.")
+                    self.hop(s, question: question, userMsg: next,
+                             loopHist: loopHist + [(userMsg, reply)], hops: hops + 1)
+                }
+                return
+            }
+
+            // respuesta final (con o sin acción visible)
+            self.setFace(.normal, for: 0)
+            s.chat.append((question, reply))
+            if s.chat.count > 8 { s.chat.removeFirst(s.chat.count - 8) }
+            if let script = fenced.body {
+                if Prefs.booActions && self.scriptIsSafe(script) {
+                    self.runAction(script, on: s)
+                    let msg = fenced.rest.isEmpty
+                        ? (self.isEN ? "on it, watch the terminal" : "voy, mira la terminal")
+                        : fenced.rest
+                    self.sayLLMReply(msg, holdFor: 12)
                 } else {
-                    self?.sayLLMReply(reply, holdFor: 16)
+                    self.showScriptForReview(script)
                 }
             } else {
-                let off = (self?.isEN ?? false) ? "LM Studio is off, turn it on and I will check" : "LM Studio está apagado, enciéndelo y te lo miro"
-                self?.say(off, holdFor: 14)
+                self.sayLLMReply(reply, holdFor: 16)
             }
         }
     }
