@@ -106,6 +106,39 @@ final class CyclopsView: NSView {
                height: CGFloat(grid.count) * pixel + 44)
     }
 
+    /// Render estático del sprite (para la intro y otros usos).
+    static func spriteImage(pixel: CGFloat) -> NSImage {
+        let cols = grid[0].count
+        let rows = grid.count
+        let size = NSSize(width: CGFloat(cols) * pixel, height: CGFloat(rows) * pixel)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        NSGraphicsContext.current?.cgContext.setShouldAntialias(false)
+        for (r, line) in grid.enumerated() {
+            for (c, ch) in line.enumerated() {
+                let color: NSColor?
+                switch ch {
+                case "K": color = outline
+                case "W": color = body
+                case "w": color = shade
+                case "E": color = eyeW
+                default:  color = nil
+                }
+                guard let color else { continue }
+                color.setFill()
+                NSRect(x: CGFloat(c) * pixel, y: CGFloat(rows - 1 - r) * pixel,
+                       width: pixel, height: pixel).fill()
+            }
+        }
+        // pupila centrada
+        pupilC.setFill()
+        NSRect(x: (CGFloat(eyeCols.lowerBound + eyeCols.count / 2) - 1) * pixel,
+               y: CGFloat(rows - 1 - eyeRows.upperBound + eyeRows.count / 2 - 1) * pixel,
+               width: pixel * 2, height: pixel * 2).fill()
+        img.unlockFocus()
+        return img
+    }
+
     /// Susto: ráfaga de glitches mientras cuenta la historia.
     func spook() {
         glitchFrames = 14

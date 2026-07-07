@@ -12,6 +12,7 @@ final class SettingsWindowController: NSWindowController {
     private var bannerCheck: NSButton!
     private var summariesCheck: NSButton!
     private var actionsCheck: NSButton!
+    private var introCheck: NSButton!
 
     private init() {
         let window = NSWindow(
@@ -89,6 +90,11 @@ final class SettingsWindowController: NSWindowController {
         actionsCheck.state = Prefs.booActions ? .on : .off
         grid.addRow(with: [NSGridCell.emptyContentView, actionsCheck])
 
+        introCheck = NSButton(checkboxWithTitle: L.t("settings.intro"),
+                              target: self, action: #selector(introChanged))
+        introCheck.state = Prefs.showIntro ? .on : .off
+        grid.addRow(with: [NSGridCell.emptyContentView, introCheck])
+
         let content = NSView(frame: window.contentLayoutRect)
         content.addSubview(grid)
         NSLayoutConstraint.activate([
@@ -134,5 +140,9 @@ final class SettingsWindowController: NSWindowController {
 
     @objc private func actionsChanged() {
         Prefs.booActions = actionsCheck.state == .on
+    }
+
+    @objc private func introChanged() {
+        Prefs.showIntro = introCheck.state == .on
     }
 }

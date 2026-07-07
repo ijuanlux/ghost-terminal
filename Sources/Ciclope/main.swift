@@ -25,9 +25,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         if restoreState() {
+            if let w = controllers.first?.window { IntroView.play(in: w) }
             return
         }
         let wc = openWindow(greet: true)
+        if let w = wc.window { IntroView.play(in: w) }
         // hooks de pruebas: CICLOPE_TEST_TABS=N / CICLOPE_TEST_PANES=N al arrancar
         let env = ProcessInfo.processInfo.environment
         if let n = Int(env["CICLOPE_TEST_TABS"] ?? ""), n > 0 {

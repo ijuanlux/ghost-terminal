@@ -27,6 +27,12 @@ enum Prefs {
         set { d.set(newValue, forKey: "ghost.aiSummaries") }
     }
 
+    /// Intro cinematográfica al arrancar la app
+    static var showIntro: Bool {
+        get { d.object(forKey: "ghost.intro") as? Bool ?? true }
+        set { d.set(newValue, forKey: "ghost.intro") }
+    }
+
     /// Acciones de boo: ejecutar en el terminal los scripts que genera el LLM
     static var booActions: Bool {
         get { d.object(forKey: "ghost.actions") as? Bool ?? true }
@@ -72,6 +78,7 @@ enum L {
         "settings.banner": "Banner de bienvenida en terminales nuevas",
         "settings.aiSummaries": "Resúmenes automáticos de Ghost (LM Studio)",
         "settings.booActions": "Permitir a boo ejecutar acciones (scripts visibles en el terminal)",
+        "settings.intro": "Intro al arrancar",
         "banner.tagline": "terminal a medida · v1.2 · ⌘T pestañas · ⌘D split · ⌘E fantasma · boo <pregunta>",
         "banner.license": "licencia: uso personal, sin garantías. si algo peta, Ghost dirá buu.",
         "ctx.askBoo": "Preguntar a boo por la selección",
@@ -113,6 +120,7 @@ enum L {
         "settings.banner": "Welcome banner on new terminals",
         "settings.aiSummaries": "Automatic Ghost summaries (LM Studio)",
         "settings.booActions": "Let boo run actions (scripts visible in the terminal)",
+        "settings.intro": "Startup intro",
         "banner.tagline": "custom terminal · v1.2 · ⌘T tabs · ⌘D split · ⌘E ghost · boo <question>",
         "banner.license": "license: personal use, no warranty. if something breaks, Ghost will just say boo.",
         "ctx.askBoo": "Ask boo about the selection",
