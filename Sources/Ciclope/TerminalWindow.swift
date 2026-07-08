@@ -224,6 +224,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
 
     private var tabs: [TerminalSession] = []
     private var activeIndex = 0
+    private var archiveExpanded = false
     private var sidePanes: [TerminalPane] = []
     private var cyclops: CyclopsView!
     private var bubble: BubbleView!
@@ -299,6 +300,14 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             self.tabs[i].customName = name.isEmpty ? nil : name
             self.refreshSidebar()
         }
+        sidebar.onToggleArchive = { [weak self] in
+            guard let self else { return }
+            self.archiveExpanded.toggle()
+            self.refreshSidebar()
+        }
+        sidebar.onArchiveTab = { [weak self] i in self?.archiveTab(i) }
+        sidebar.onRestoreArchived = { [weak self] id in self?.restoreArchived(id) }
+        sidebar.onDeleteArchived = { [weak self] id in self?.deleteArchived(id) }
     }
 
     private func setupSplits(in content: NSView) {
@@ -388,6 +397,56 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
         }
         selectTab(min(activeIndex >= i ? activeIndex - 1 : activeIndex, tabs.count - 1))
         if wasGhostHome { brain.attach(tabs[activeIndex], announce: false) }
+    }
+
+    // MARK: - Archivo de terminales
+
+    /// Congela la pestaña: snapshot al archivo (con su .log de scrollback) y
+    /// se cierra el shell. Desaparece del día a día pero se puede restaurar.
+    func archiveTab(_ i: Int) {
+        guard tabs.indices.contains(i) else { return }
+        SessionArchive.add(tabs[i].snapshot())   // antes de matar el shell
+        closeTab(i)
+        if window != nil { refreshSidebar() }
+    }
+
+    func archiveActiveTab() { archiveTab(activeIndex) }
+
+    /// Revive una sesión archivada como pestaña nueva, con su scrollback,
+    /// cwd, historial y memoria de Ghost. Sale del archivo.
+    func restoreArchived(_ id: String) {
+        guard let entry = SessionArchive.remove(id: id),
+              let info = TerminalSession.restoreInfo(from: entry) else {
+            refreshSidebar()   // otra ventana se la llevó antes: refrescar y ya
+            return
+        }
+        addTab(session: TerminalSession(fontSize: fontSize, restore: info))
+    }
+
+    /// Borra una entrada del archivo para siempre, incluido su scrollback.
+    func deleteArchived(_ id: String) {
+        guard SessionArchive.remove(id: id) != nil else { refreshSidebar(); return }
+        try? FileManager.default.removeItem(
+            at: TerminalSession.sessionsDir.appendingPathComponent("\(id).log"))
+        refreshSidebar()
+    }
+
+    private static let archiveDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM HH:mm"
+        return f
+    }()
+
+    private var archivedItems: [TabSidebarView.ArchivedItem] {
+        SessionArchive.entries.map { entry in
+            let id = entry["id"] as? String ?? ""
+            let custom = (entry["name"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let cwd = (entry["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let name = custom ?? cwd.map { ($0 as NSString).lastPathComponent } ?? "terminal"
+            let when = (entry["archivedAt"] as? Double)
+                .map { Self.archiveDateFormatter.string(from: Date(timeIntervalSince1970: $0)) } ?? ""
+            return .init(id: id, name: name, subtitle: when)
+        }
     }
 
     func moveTab(from: Int, to: Int) {
@@ -480,7 +539,8 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
             "PWD", "OLDPWD", "SHLVL", "_", "TERM", "TERM_PROGRAM", "TERM_SESSION_ID",
             "ZDOTDIR", "TMPDIR", "XPC_FLAGS", "XPC_SERVICE_NAME", "SECURITYSESSIONID",
             "SHELL", "HOME", "USER", "LOGNAME", "PATH", "COLORTERM", "SSH_AUTH_SOCK",
-            "CICLOPE_EVENTS", "CICLOPE_STATE", "DISPLAY", "LaunchInstanceID",
+            "CICLOPE_EVENTS", "CICLOPE_STATE", "CICLOPE_ACTION", "CICLOPE_PRINT",
+            "DISPLAY", "LaunchInstanceID",
         ]
         if let env = try? String(contentsOf: old.stateURL, encoding: .utf8) {
             for line in env.split(separator: "\n") {
@@ -505,13 +565,17 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate, NSSp
     func selectTabNumber(_ n: Int) { selectTab(n - 1) }
 
     private func refreshSidebar() {
-        sidebar.update(items: tabs.map { .init(name: $0.displayName, subtitle: $0.subtitle) }, active: activeIndex)
+        sidebar.update(items: tabs.map { .init(name: $0.displayName, subtitle: $0.subtitle) },
+                       active: activeIndex,
+                       archived: archivedItems, archiveExpanded: archiveExpanded)
         layoutChrome()
     }
 
     private func layoutChrome() {
         guard let content = window?.contentView else { return }
-        let showSidebar = tabs.count > 1
+        // con sesiones archivadas la sidebar se queda aunque haya una sola
+        // pestaña: si no, el archivo sería inalcanzable
+        let showSidebar = tabs.count > 1 || SessionArchive.count > 0
         sidebar.isHidden = !showSidebar
         let x: CGFloat = showSidebar ? 164 : 8
         rootSplit.frame = NSRect(x: x, y: 30,

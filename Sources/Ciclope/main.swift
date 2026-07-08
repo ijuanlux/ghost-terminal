@@ -32,10 +32,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Crea o restaura las ventanas de terminal (tras la intro).
     private func bootWindows() {
+        // trazas de los hooks de prueba: print va con buffer si stdout no es
+        // un tty, hay que hacer flush o se pierden al matar el proceso
+        let testing = ProcessInfo.processInfo.environment["CICLOPE_TEST_ARCHIVE"] != nil
+        let tlog: (String) -> Void = { if testing { print($0); fflush(stdout) } }
+        tlog("TEST: bootWindows")
         if restoreState() {
+            tlog("TEST: restoreState devolvió true, no hay hooks")
             return
         }
         let wc = openWindow(greet: true)
+        tlog("TEST: ventana abierta")
         // hooks de pruebas: CICLOPE_TEST_TABS=N / CICLOPE_TEST_PANES=N al arrancar
         let env = ProcessInfo.processInfo.environment
         if let n = Int(env["CICLOPE_TEST_TABS"] ?? ""), n > 0 {
@@ -57,6 +64,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+        // hook de pruebas: archiva la pestaña 2 y luego restaura la entrada
+        // más antigua (ida y vuelta completa snapshot → archivo → pestaña)
+        if env["CICLOPE_TEST_ARCHIVE"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+                tlog("TEST_ARCHIVE: antes=\(SessionArchive.count) archivando pestaña 2")
+                wc.archiveTab(1)
+                tlog("TEST_ARCHIVE: después=\(SessionArchive.count)")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 9.0) {
+                tlog("TEST_ARCHIVE: restaurando \(SessionArchive.ids.first ?? "nada")")
+                if let id = SessionArchive.ids.first { wc.restoreArchived(id) }
+                tlog("TEST_ARCHIVE: quedan=\(SessionArchive.count)")
+            }
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
@@ -76,8 +97,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: []) else { return }
         try? data.write(to: stateURL)
 
-        // limpiar logs huérfanos
-        let alive = Set(controllers.flatMap { $0.sessionIDs })
+        // limpiar logs huérfanos (los archivados no lo son: su scrollback
+        // tiene que sobrevivir para poder restaurarlos)
+        let alive = Set(controllers.flatMap { $0.sessionIDs } + SessionArchive.ids)
         let dir = TerminalSession.sessionsDir
         if let files = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
             for f in files where f.hasSuffix(".log") {
@@ -159,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc func newWindow(_ sender: Any?) { openWindow(greet: false) }
     @objc func closePane(_ sender: Any?) { keyController?.closeFocusedPaneOrWindow() }
+    @objc func archiveTab(_ sender: Any?) { keyController?.archiveActiveTab() }
     @objc func nextTab(_ sender: Any?) { keyController?.nextTab() }
     @objc func prevTab(_ sender: Any?) { keyController?.prevTab() }
     @objc func gotoTab(_ sender: Any?) {
@@ -212,6 +235,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         shellMenu.addItem(withTitle: L.t("menu.split"), action: #selector(newSplit(_:)), keyEquivalent: "d")
         shellMenu.addItem(withTitle: L.t("menu.newWindow"), action: #selector(newWindow(_:)), keyEquivalent: "n")
         shellMenu.addItem(.separator())
+        // "A" mayúscula = ⇧⌘A implícito
+        shellMenu.addItem(withTitle: L.t("menu.archiveTab"), action: #selector(archiveTab(_:)), keyEquivalent: "A")
         shellMenu.addItem(withTitle: L.t("menu.close"), action: #selector(closePane(_:)), keyEquivalent: "w")
         shellItem.submenu = shellMenu
 

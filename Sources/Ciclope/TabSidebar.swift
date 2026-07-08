@@ -12,15 +12,34 @@ final class TabSidebarView: NSView {
         let subtitle: String
     }
 
+    struct ArchivedItem {
+        let id: String
+        let name: String
+        let subtitle: String
+    }
+
     var onSelect: ((Int) -> Void)?
     var onCloseTab: ((Int) -> Void)?
     var onMove: ((Int, Int) -> Void)?
     var onDropBeyond: ((Int, NSPoint) -> Void)?   // soltada fuera de la sidebar
     var onDragMoved: ((NSPoint) -> Void)?         // arrastre en vivo (para el hint)
     var onRename: ((Int, String) -> Void)?
+    var onToggleArchive: (() -> Void)?            // click en la barra del archivo
+    var onArchiveTab: ((Int) -> Void)?            // pestaña soltada sobre el archivo
+    var onRestoreArchived: ((String) -> Void)?    // click en una sesión archivada
+    var onDeleteArchived: ((String) -> Void)?     // ✕ de una sesión archivada
 
     private var cells: [TabCell] = []
     private let cellHeight: CGFloat = 46
+
+    // sección de archivo, anclada abajo: barra siempre visible (es el drop
+    // target) y, desplegada, las sesiones congeladas encima de ella
+    private var archiveBar: ArchiveBarCell?
+    private var archivedCells: [ArchivedCell] = []
+    private var archivedIDs: [String] = []
+    private var archiveExpanded = false
+    private let archiveBarHeight: CGFloat = 24
+    private let archivedCellHeight: CGFloat = 36
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -36,9 +55,11 @@ final class TabSidebarView: NSView {
     func applyTheme() {
         layer?.backgroundColor = Theme.chromeBg.cgColor
         layer?.borderColor = Theme.accent.withAlphaComponent(0.18).cgColor
+        archiveBar?.applyTheme()
+        archivedCells.forEach { $0.applyTheme() }
     }
 
-    func update(items: [Item], active: Int) {
+    func update(items: [Item], active: Int, archived: [ArchivedItem], archiveExpanded expanded: Bool) {
         // no tocar nada mientras se edita un nombre
         if cells.contains(where: { $0.isEditing }) { return }
 
@@ -47,24 +68,50 @@ final class TabSidebarView: NSView {
             for (i, cell) in cells.enumerated() {
                 cell.apply(item: items[i], active: i == active)
             }
-            return
-        }
-
-        cells.forEach { $0.removeFromSuperview() }
-        cells = []
-        for (i, item) in items.enumerated() {
-            let cell = TabCell(index: i, item: item, active: i == active)
-            cell.onClick = { [weak self] in self?.onSelect?(i) }
-            cell.onClose = { [weak self] in self?.onCloseTab?(i) }
-            cell.onRename = { [weak self] name in self?.onRename?(i, name) }
-            cell.onDragMoved = { [weak self] screenPoint in self?.onDragMoved?(screenPoint) }
-            cell.onDragEnded = { [weak self] screenPoint in
-                self?.handleDrop(from: i, screenPoint: screenPoint)
+        } else {
+            cells.forEach { $0.removeFromSuperview() }
+            cells = []
+            for (i, item) in items.enumerated() {
+                let cell = TabCell(index: i, item: item, active: i == active)
+                cell.onClick = { [weak self] in self?.onSelect?(i) }
+                cell.onClose = { [weak self] in self?.onCloseTab?(i) }
+                cell.onRename = { [weak self] name in self?.onRename?(i, name) }
+                cell.onDragMoved = { [weak self] screenPoint in self?.onDragMoved?(screenPoint) }
+                cell.onDragEnded = { [weak self] screenPoint in
+                    self?.handleDrop(from: i, screenPoint: screenPoint)
+                }
+                addSubview(cell)
+                cells.append(cell)
             }
-            addSubview(cell)
-            cells.append(cell)
         }
+        updateArchive(archived, expanded: expanded)
         layoutCells()
+    }
+
+    /// Refresca la sección de archivo; solo reconstruye las celdas si cambió
+    /// la lista o el plegado (reconstruir en cada refresco mata los clicks).
+    private func updateArchive(_ archived: [ArchivedItem], expanded: Bool) {
+        if archiveBar == nil {
+            let bar = ArchiveBarCell()
+            bar.onClick = { [weak self] in self?.onToggleArchive?() }
+            addSubview(bar)
+            archiveBar = bar
+        }
+        archiveBar?.apply(count: archived.count, expanded: expanded)
+
+        let ids = archived.map { $0.id }
+        if ids != archivedIDs || expanded != archiveExpanded {
+            archivedCells.forEach { $0.removeFromSuperview() }
+            archivedCells = (expanded ? archived : []).map { item in
+                let cell = ArchivedCell(item: item)
+                cell.onRestore = { [weak self] in self?.onRestoreArchived?(item.id) }
+                cell.onDelete = { [weak self] in self?.onDeleteArchived?(item.id) }
+                addSubview(cell)
+                return cell
+            }
+            archivedIDs = ids
+            archiveExpanded = expanded
+        }
     }
 
     override func layout() {
@@ -77,12 +124,25 @@ final class TabSidebarView: NSView {
             cell.frame = NSRect(x: 3, y: bounds.height - CGFloat(i + 1) * cellHeight - 4,
                                 width: bounds.width - 6, height: cellHeight - 4)
         }
+        archiveBar?.frame = NSRect(x: 3, y: 4, width: bounds.width - 6, height: archiveBarHeight)
+        // desplegado: las archivadas crecen desde la barra hacia arriba,
+        // la primera de la lista queda arriba del todo
+        for (i, cell) in archivedCells.enumerated() {
+            let fromBottom = archivedCells.count - 1 - i
+            cell.frame = NSRect(x: 3, y: 8 + archiveBarHeight + CGFloat(fromBottom) * archivedCellHeight,
+                                width: bounds.width - 6, height: archivedCellHeight - 3)
+        }
     }
 
     private func handleDrop(from: Int, screenPoint: NSPoint) {
         guard let window else { return }
         if window.frame.contains(screenPoint) {
             let local = convert(window.convertPoint(fromScreen: screenPoint), from: nil)
+            // sobre la barra del archivo (con margen): congelar la pestaña
+            if let bar = archiveBar, bar.frame.insetBy(dx: 0, dy: -10).contains(local) {
+                onArchiveTab?(from)
+                return
+            }
             if bounds.insetBy(dx: -20, dy: -20).contains(local) {
                 // dentro de la sidebar: reordenar
                 let target = max(0, min(cells.count - 1, Int((bounds.height - local.y - 4) / cellHeight)))
@@ -233,5 +293,111 @@ private final class TabCell: NSView, NSTextFieldDelegate {
             onClick?()
         }
         dragging = false
+    }
+}
+
+// Barra del archivo, abajo del todo de la sidebar: muestra el contador, hace
+// de drop target para congelar pestañas y con un click despliega/pliega.
+private final class ArchiveBarCell: NSView {
+    var onClick: (() -> Void)?
+    private let label = NSTextField(labelWithString: "")
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        toolTip = L.t("archive.tip")
+        label.font = Theme.font(size: 10)
+        label.lineBreakMode = .byTruncatingTail
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6),
+        ])
+        applyTheme()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func apply(count: Int, expanded: Bool) {
+        let chevron = expanded ? "▾" : "▸"
+        label.stringValue = "\(chevron) 🗃 \(L.t("archive.title"))" + (count > 0 ? " (\(count))" : "")
+        label.textColor = count > 0 ? Theme.dimFg : Theme.dimFg.withAlphaComponent(0.5)
+    }
+
+    func applyTheme() {
+        layer?.backgroundColor = Theme.accent.withAlphaComponent(0.06).cgColor
+        layer?.borderColor = Theme.accent.withAlphaComponent(0.25).cgColor
+        layer?.borderWidth = 1
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if bounds.contains(convert(event.locationInWindow, from: nil)) { onClick?() }
+    }
+}
+
+// Una sesión congelada en el archivo: click restaura, ✕ la borra del archivo.
+private final class ArchivedCell: NSView {
+    var onRestore: (() -> Void)?
+    var onDelete: (() -> Void)?
+    private let nameLabel = NSTextField(labelWithString: "")
+    private let sub = NSTextField(labelWithString: "")
+
+    init(item: TabSidebarView.ArchivedItem) {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 4
+        toolTip = L.t("archive.cell.tip")
+
+        nameLabel.stringValue = "👻 " + item.name
+        nameLabel.font = Theme.font(size: 10)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(nameLabel)
+
+        sub.stringValue = item.subtitle
+        sub.font = Theme.font(size: 8)
+        sub.lineBreakMode = .byTruncatingTail
+        sub.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(sub)
+
+        let close = NSButton(title: "✕", target: self, action: #selector(deleteTapped))
+        close.isBordered = false
+        close.font = NSFont.systemFont(ofSize: 9)
+        close.contentTintColor = Theme.dimFg.withAlphaComponent(0.7)
+        close.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(close)
+
+        NSLayoutConstraint.activate([
+            nameLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            nameLabel.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            nameLabel.trailingAnchor.constraint(lessThanOrEqualTo: close.leadingAnchor, constant: -4),
+            sub.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            sub.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
+            sub.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6),
+            close.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+            close.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+        ])
+        applyTheme()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func applyTheme() {
+        layer?.backgroundColor = Theme.chromeBg.cgColor
+        layer?.borderColor = Theme.accent.withAlphaComponent(0.15).cgColor
+        layer?.borderWidth = 1
+        nameLabel.textColor = Theme.dimFg
+        sub.textColor = Theme.dimFg.withAlphaComponent(0.55)
+    }
+
+    @objc private func deleteTapped() { onDelete?() }
+
+    override func mouseUp(with event: NSEvent) {
+        if event.clickCount == 1, bounds.contains(convert(event.locationInWindow, from: nil)) {
+            onRestore?()
+        }
     }
 }
