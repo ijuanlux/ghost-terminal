@@ -55,7 +55,7 @@ final class LMStudio {
     /// Chat corto. `history` son intercambios previos (pregunta, respuesta) para
     /// que el modelo mantenga el hilo. Devuelve nil si LM Studio no está o falla.
     func chat(system: String, history: [(q: String, a: String)] = [], user: String, maxTokens: Int = 90,
-              imagePath: String? = nil, completion: @escaping (String?) -> Void) {
+              temperature: Double = 0.8, imagePath: String? = nil, completion: @escaping (String?) -> Void) {
         checkAvailable { [weak self] ok in
             guard ok, let self, let model = self.cachedModel else {
                 completion(nil)
@@ -82,7 +82,7 @@ final class LMStudio {
             let body: [String: Any] = [
                 "model": model,
                 "messages": messages,
-                "temperature": 0.8,
+                "temperature": temperature,
                 "max_tokens": maxTokens,
             ]
             req.httpBody = try? JSONSerialization.data(withJSONObject: body)

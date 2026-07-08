@@ -8,6 +8,8 @@ import Foundation
 final class ShellIntegration {
     let eventsURL: URL
     let stateURL: URL
+    let actionURL: URL   // script de acción de boo, se ejecuta al recibir SIGUSR1
+    let printURL: URL    // contenido a volcar en el terminal al recibir SIGUSR2
     let zdotdir: URL
     private var offset: UInt64 = 0
     private var pollTimer: Timer?
@@ -25,6 +27,8 @@ final class ShellIntegration {
         let id = UUID().uuidString
         eventsURL = FileManager.default.temporaryDirectory.appendingPathComponent("ciclope-\(id).jsonl")
         stateURL = FileManager.default.temporaryDirectory.appendingPathComponent("ciclope-state-\(id).env")
+        actionURL = FileManager.default.temporaryDirectory.appendingPathComponent("ciclope-action-\(id).zsh")
+        printURL = FileManager.default.temporaryDirectory.appendingPathComponent("ciclope-print-\(id).txt")
         FileManager.default.createFile(atPath: eventsURL.path, contents: nil)
 
         writeZdotFiles()
@@ -35,6 +39,8 @@ final class ShellIntegration {
         pollTimer?.invalidate()
         try? FileManager.default.removeItem(at: eventsURL)
         try? FileManager.default.removeItem(at: stateURL)
+        try? FileManager.default.removeItem(at: actionURL)
+        try? FileManager.default.removeItem(at: printURL)
     }
 
     var environment: [String] {
@@ -44,8 +50,16 @@ final class ShellIntegration {
         env["ZDOTDIR"] = zdotdir.path
         env["CICLOPE_EVENTS"] = eventsURL.path
         env["CICLOPE_STATE"] = stateURL.path
+        env["CICLOPE_ACTION"] = actionURL.path
+        env["CICLOPE_PRINT"] = printURL.path
         env["TERM_PROGRAM"] = "Ghost"
         env.removeValue(forKey: "TERMINFO")
+        // lanzada desde Finder la app no trae LANG y mdfind (entre otros) se
+        // queja por stderr del locale vacío; se fija al del sistema
+        if env["LANG"] == nil {
+            let loc = Locale.current.identifier.split(separator: "@").first.map(String.init) ?? "en_US"
+            env["LANG"] = "\(loc).UTF-8"
+        }
         return env.map { "\($0.key)=\($0.value)" }
     }
 
@@ -100,6 +114,41 @@ final class ShellIntegration {
             echo "(boo) en ello..."
         }
         alias boo='noglob __ciclope_ask'
+
+        # La magia de boo: sus acciones llegan por señal, no tecleadas, así en
+        # el terminal solo aparece la salida (nunca "zsh /ruta/boo-action.zsh").
+        # USR1 ejecuta el script de acción emitiendo los mismos eventos
+        # exec/done, para que boo siga viendo el resultado de lo que hace;
+        # USR2 vuelca el fichero print tal cual. null_glob: un patrón sin
+        # coincidencias desaparece en vez de abortar el script. El stderr se
+        # filtra del NSLog de mdfind que no hay forma de callar. El return 0
+        # es obligatorio: si un TRAPxxx devuelve distinto de cero, zsh aplica
+        # el efecto por defecto de la señal (USR1/USR2 matan el shell).
+        # Guardas de mv/cp: con null_glob, "mv *.png *.jpg images/" sin ficheros
+        # que muevan se queda en "mv images/" y escupe un usage. Si tras
+        # esfumarse los globs no quedan orígenes, es que no había nada que
+        # mover: no-op silencioso en vez de ruido.
+        __ciclope_action() {
+            [ -n "$CICLOPE_ACTION" ] && [ -f "$CICLOPE_ACTION" ] || return 0
+            print -r -- ""
+            __ciclope_preexec "$(<"$CICLOPE_ACTION")"
+            /bin/zsh -o null_glob -c '
+                mv() { (( $# >= 2 )) || return 0; command mv "$@" }
+                cp() { (( $# >= 2 )) || return 0; command cp "$@" }
+                . "$1"' _ "$CICLOPE_ACTION" 2> >(grep --line-buffered -vE 'mdfind\\[[0-9]+' >&2)
+            __ciclope_precmd
+            zle && zle reset-prompt
+            return 0
+        }
+        __ciclope_show() {
+            [ -n "$CICLOPE_PRINT" ] && [ -f "$CICLOPE_PRINT" ] || return 0
+            print -r -- ""
+            command cat -- "$CICLOPE_PRINT"
+            zle && zle reset-prompt
+            return 0
+        }
+        TRAPUSR1() { __ciclope_action; return 0 }
+        TRAPUSR2() { __ciclope_show; return 0 }
         """
         try? zshenv.write(to: zdotdir.appendingPathComponent(".zshenv"), atomically: true, encoding: .utf8)
         try? zprofile.write(to: zdotdir.appendingPathComponent(".zprofile"), atomically: true, encoding: .utf8)

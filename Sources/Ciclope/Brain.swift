@@ -96,6 +96,21 @@ final class Brain {
 
     private static let knownKinds: Set<String> = ["run", "read", "print", "zsh", "sh", "bash"]
 
+    /// El modelo local a menudo rompe el formato de dos maneras: cierra el fence
+    /// en la misma línea ("```run``` mdfind ...", dejando el comando FUERA del
+    /// bloque) o se queda sin cerrar el fence. Se normaliza antes de parsear.
+    private static func normalizeFences(_ text: String) -> String {
+        var t = text
+        for kind in knownKinds {
+            t = t.replacingOccurrences(of: "```\(kind)```", with: "```\(kind)\n")
+        }
+        // número impar de ``` => fence sin cerrar: se cierra al final
+        if t.components(separatedBy: "```").count % 2 == 0 {
+            t += "\n```"
+        }
+        return t
+    }
+
     /// Extrae el primer bloque ```...``` del texto. Robusto ante el modelo local:
     /// la "kind" (run/read/print/zsh) puede venir como lenguaje del fence O como
     /// primera línea suelta dentro del cuerpo ("```\nrun\nmdfind..."), y si la
@@ -138,9 +153,10 @@ final class Brain {
     /// Robusto ante el modelo local: da igual la etiqueta o si escribe basura,
     /// mientras haya una ruta de documento real la leemos con PDFKit.
     private static func docReadPath(in command: String) -> String? {
-        // si es una acción de mover/copiar/borrar, NO es una lectura
+        // si es una acción de mover/copiar/borrar/abrir, NO es una lectura:
+        // "open x.pdf" debe abrir el documento en su app, no resumirlo
         let lower = command.lowercased()
-        for verb in ["mv ", "cp ", "rsync", "rm ", "mkdir", "touch ", "> "] {
+        for verb in ["mv ", "cp ", "rsync", "rm ", "mkdir", "touch ", "> ", "open "] {
             if lower.contains(verb) { return nil }
         }
         let pattern = #"/[^\n]*?\.(pdf|docx|doc|rtf|pages|odt|key|numbers|epub)\b"#
@@ -188,6 +204,7 @@ final class Brain {
 
     /// Enseña un script vetado en el bocadillo, sin ejecutarlo.
     private func showScriptForReview(_ script: String) {
+        Self.debugLog("DECISION: showScriptForReview (vetado)\n\(script)")
         DispatchQueue.main.async {
             self.setFace(.normal, for: 0)
             self.commandBubble?.anchor = self.cyclops
@@ -204,7 +221,7 @@ final class Brain {
         let forbidden = [
             #"(^|[;&|`$(\s])rm\s"#,
             #"\bsudo\b"#, #"\bmkfs\b"#, #"\bdiskutil\b"#, #"(^|\s)dd\s"#,
-            #">\s*/dev/"#, #"curl.*\|\s*(z|ba)?sh"#, #"\bkillall\b"#,
+            #">\s*/dev/(?!null)"#, #"curl.*\|\s*(z|ba)?sh"#, #"\bkillall\b"#,
             #"chmod\s+-R"#, #"\bshred\b"#, #"--delete"#,
         ]
         for pattern in forbidden {
@@ -218,29 +235,38 @@ final class Brain {
         return true
     }
 
-    /// Guarda el script y lo lanza en el terminal de la sesión, a la vista.
+    /// Lanza el script en el terminal de la sesión sin teclear nada: solo se
+    /// ve la salida (la app señala al shell y el trap del zshrc lo ejecuta).
+    /// Los detalles feos (null_glob, filtro del stderr de mdfind) viven en el
+    /// trap __ciclope_action de ShellIntegration.
     private func runAction(_ script: String, on s: TerminalSession) {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Ciclope", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("boo-action.zsh")
-        let full = "#!/bin/zsh\n# generado por boo\nset -e\n" + script + "\n"
-        try? full.write(to: url, atomically: true, encoding: .utf8)
+        Self.debugLog("DECISION: runAction\n\(script)")
         DispatchQueue.main.async {
-            s.send("zsh '" + url.path + "'\n")
+            s.runHiddenAction(script)
         }
     }
 
     /// Imprime contenido (tabla, resumen, listado, descripción) EN el terminal,
-    /// tal cual, preservando formato: lo escribe a un fichero y hace cat.
+    /// tal cual, preservando formato, por el mismo mecanismo invisible.
     private func printToTerminal(_ text: String, on s: TerminalSession) {
+        DispatchQueue.main.async {
+            s.printHidden(text)
+        }
+    }
+
+    /// Log de depuración de las respuestas crudas del LLM y la decisión tomada.
+    static func debugLog(_ text: String) {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Ciclope", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let url = dir.appendingPathComponent("boo-print.txt")
-        try? (text + "\n").write(to: url, atomically: true, encoding: .utf8)
-        DispatchQueue.main.async {
-            s.send("cat '" + url.path + "'\n")
+        let url = dir.appendingPathComponent("boo-debug.log")
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let line = "\n===== \(stamp) =====\n" + text + "\n"
+        if let h = try? FileHandle(forWritingTo: url) {
+            h.seekToEndOfFile()
+            h.write(line.data(using: .utf8)!)
+            try? h.close()
+        } else {
+            try? line.write(to: url, atomically: true, encoding: .utf8)
         }
     }
 
@@ -393,8 +419,8 @@ final class Brain {
         setFace(.thinking, for: 90)
         s.printStep(isEN ? "thinking..." : "pensando...")
         let instructions = isEN
-            ? "\n\n\(userName) asks: \(question)\nYou HAVE REAL ACCESS to this Mac, never say you cannot access files. Mechanisms: (1) to LOOK SOMETHING UP (find files, list, info) reply ONLY with a ```run``` block containing one read-only command (mdfind, find, ls, du, file, mdls...) and you will receive its output; to READ A DOCUMENT (pdf, docx, txt, md...) reply ONLY with a ```read``` block containing just the file path and you will get its extracted text (NEVER cat a pdf/binary); (2) to SHOW content in the terminal (a table, a summary of a document, a long list, a description) reply with an optional short sentence plus a ```print``` block whose content is dumped verbatim into the terminal (use plain text, aligned columns or markdown-ish tables); (3) to PERFORM a side-effecting action (open, move, organize, create) reply with one short sentence plus a ```zsh``` block (mkdir -p, mv, cp, mdfind, open; NEVER delete, move instead; use $HOME). Short chat answers go in the bubble; use print for anything long or formatted. Reply in the language of the question."
-            : "\n\nPregunta de \(userName): \(question)\nTIENES ACCESO REAL a este Mac, nunca digas que no puedes acceder a los ficheros. Mecanismos: (1) para CONSULTAR algo (buscar ficheros, listar, info) responde SOLO con un ```run``` con un comando de solo lectura (mdfind, find, ls, du, file, mdls...) y recibirás su salida; para LEER UN DOCUMENTO (pdf, docx, txt, md...) responde SOLO con un ```read``` que contenga solo la ruta del fichero y recibirás su texto extraído (NUNCA hagas cat de un pdf/binario); (2) para MOSTRAR contenido en la terminal (una tabla, el resumen de un documento, un listado largo, una descripción) responde con una frase corta opcional más un bloque ```print``` cuyo contenido se vuelca tal cual en la terminal (texto plano, columnas alineadas o tablas estilo markdown); (3) para REALIZAR una acción con efectos (abrir, mover, organizar, crear) responde una frase corta más un ```zsh``` (mkdir -p, mv, cp, mdfind, open; NUNCA borres, mueve en su lugar; usa $HOME). Las respuestas cortas de charla van en el bocadillo; usa print para lo largo o formateado. Responde en el idioma de la pregunta."
+            ? "\n\n\(userName) asks: \(question)\nYou HAVE REAL ACCESS to this Mac, never say you cannot access files. Mechanisms: (1) to LOOK SOMETHING UP (find files, list, info) reply ONLY with a ```run``` block containing one read-only command (mdfind, find, ls, du, file, mdls...) and you will receive its output; to READ A DOCUMENT (pdf, docx, txt, md...) reply ONLY with a ```read``` block containing just the file path and you will get its extracted text (NEVER cat a pdf/binary); (2) to SHOW content in the terminal (a table, a summary of a document, a long list, a description) reply with an optional short sentence plus a ```print``` block whose content is dumped verbatim into the terminal (use plain text, aligned columns or markdown-ish tables); (3) to PERFORM a side-effecting action (open, move, organize, create) reply with one short sentence plus a ```zsh``` block (mkdir -p, mv, cp, mdfind, open; NEVER delete, move instead; use $HOME). Short chat answers go in the bubble; use print for anything long or formatted. Reply in the language of the question. EXACT block format, the command goes INSIDE the block on its own line:\n```run\nmdfind -name 'report.pdf'\n```\nTell intents apart: if \(userName) asks to OPEN a file, reply with ```zsh``` and open (it opens in its app), NEVER with read; use ```read``` only when you need the content to answer or summarize. If they ask to organize, create or move, reply with the ```zsh``` that DOES it (it really runs): do not describe the plan or label it run or print. To organize a folder, FIRST look at what is in it with a ```run\nls\n``` block, and on the next turn move ALL the extensions you saw, not just the usual ones (files whose type has no folder go to an others/ folder; never leave loose files behind). Correct example of organizing by type (one mv per folder, each with its destination at the end):\n```zsh\nmkdir -p images documents ; mv *.png *.jpg images/ ; mv *.pdf *.txt documents/\n``` To search files by name prefer mdfind -name 'text' or mdfind 'kind:pdf text'; the -onlyin option goes OUTSIDE the quotes: mdfind 'kind:pdf' -onlyin $HOME/Downloads. run commands are killed after 12s: NEVER du/find over the whole home, for big files use mdfind 'kMDItemFSSize > 500000000' -onlyin $HOME, then ls -lh on the hits."
+            : "\n\nPregunta de \(userName): \(question)\nTIENES ACCESO REAL a este Mac, nunca digas que no puedes acceder a los ficheros. Mecanismos: (1) para CONSULTAR algo (buscar ficheros, listar, info) responde SOLO con un ```run``` con un comando de solo lectura (mdfind, find, ls, du, file, mdls...) y recibirás su salida; para LEER UN DOCUMENTO (pdf, docx, txt, md...) responde SOLO con un ```read``` que contenga solo la ruta del fichero y recibirás su texto extraído (NUNCA hagas cat de un pdf/binario); (2) para MOSTRAR contenido en la terminal (una tabla, el resumen de un documento, un listado largo, una descripción) responde con una frase corta opcional más un bloque ```print``` cuyo contenido se vuelca tal cual en la terminal (texto plano, columnas alineadas o tablas estilo markdown); (3) para REALIZAR una acción con efectos (abrir, mover, organizar, crear) responde una frase corta más un ```zsh``` (mkdir -p, mv, cp, mdfind, open; NUNCA borres, mueve en su lugar; usa $HOME). Las respuestas cortas de charla van en el bocadillo; usa print para lo largo o formateado. Responde en el idioma de la pregunta. Formato EXACTO de los bloques, el comando va DENTRO del bloque en su propia línea:\n```run\nmdfind -name 'informe.pdf'\n```\nDistingue la intención: si \(userName) pide ABRIR un fichero, responde con ```zsh``` y open (se abre en su aplicación), NUNCA con read; usa ```read``` solo cuando necesites el contenido para responder o resumir. Si pide organizar, crear o mover, responde con el ```zsh``` que lo HACE (se ejecuta de verdad): no describas el plan ni lo etiquetes como run o print. Para organizar una carpeta, PRIMERO mira qué hay con un ```run\nls\n``` y en el siguiente turno mueve TODAS las extensiones que viste, no solo las típicas (lo que no encaje en ninguna carpeta va a una carpeta otros/; nunca dejes ficheros sueltos). Ejemplo correcto de organizar por tipo (un mv por carpeta, cada uno con su destino al final):\n```zsh\nmkdir -p imagenes documentos ; mv *.png *.jpg imagenes/ ; mv *.pdf *.txt documentos/\n``` Para buscar ficheros por nombre usa mdfind -name 'texto' o mdfind 'kind:pdf texto'; la opción -onlyin va FUERA de las comillas: mdfind 'kind:pdf' -onlyin $HOME/Downloads. Los comandos run se matan a los 12s: NUNCA du/find sobre todo el home, para ficheros grandes usa mdfind 'kMDItemFSSize > 500000000' -onlyin $HOME y luego ls -lh sobre los resultados."
         hop(s, question: question, userMsg: context(for: s) + imageNote(s) + instructions,
             loopHist: [], hops: 0, image: s.pendingImage)
         s.pendingImage = nil
@@ -429,6 +455,7 @@ final class Brain {
             history: Array(s.chat.suffix(6)) + loopHist,
             user: userMsg,
             maxTokens: 600,
+            temperature: 0.3,   // modo agente: fiabilidad de formato > gracia
             imagePath: image
         ) { [weak self] reply in
             guard let self else { return }
@@ -438,7 +465,8 @@ final class Brain {
                 self.say(off, holdFor: 14)
                 return
             }
-            let fenced = Self.extractFenced(reply)
+            let fenced = Self.extractFenced(Self.normalizeFences(reply))
+            Self.debugLog("hop=\(hops) lang='\(fenced.lang)' body=\(fenced.body ?? "nil")\nRAW: \(reply)")
 
             // tokens reales del modelo este salto (usage de LM Studio); si no
             // los reporta, estimación por caracteres como último recurso
@@ -494,7 +522,21 @@ final class Brain {
             // bloque run: consultar la máquina en silencio y devolverle la salida
             if let body = fenced.body, fenced.lang == "run", hops < 3, Prefs.booActions {
                 guard self.runIsSafe(body) else {
-                    self.showScriptForReview(body)
+                    // el modelo a veces etiqueta como run una acción que escribe
+                    // (mkdir, mv, open...): si es segura se ejecuta a la vista
+                    // como acción zsh en vez de vetarla
+                    if self.scriptIsSafe(body) {
+                        self.setFace(.normal, for: 0)
+                        s.printStep((self.isEN ? "done" : "listo") + "\r\n")
+                        Prefs.countBooQuery()
+                        self.runAction(body, on: s)
+                        let msg = fenced.rest.isEmpty
+                            ? (self.isEN ? "on it, watch the terminal" : "voy, mira la terminal")
+                            : fenced.rest
+                        self.sayLLMReply(msg, holdFor: 12)
+                    } else {
+                        self.showScriptForReview(body)
+                    }
                     return
                 }
                 self.say(self.isEN ? "let me look..." : "déjame mirar...", holdFor: 60)

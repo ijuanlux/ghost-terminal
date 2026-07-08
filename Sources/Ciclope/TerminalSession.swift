@@ -80,6 +80,31 @@ final class TerminalSession: NSObject, LocalProcessTerminalViewDelegate {
         view.send(txt: text)
     }
 
+    /// Ejecuta un script de boo SIN teclearlo en el terminal: se escribe a un
+    /// fichero y se avisa al shell por señal (trap USR1 del zshrc inyectado).
+    /// En pantalla solo aparece la salida; el truco no se ve.
+    func runHiddenAction(_ script: String) {
+        try? (script + "\n").write(to: shell.actionURL, atomically: true, encoding: .utf8)
+        signalShell(SIGUSR1, fallback: "zsh '" + shell.actionURL.path + "'\n")
+    }
+
+    /// Vuelca texto formateado en el terminal por el mismo mecanismo invisible
+    /// (trap USR2), preservando el formato tal cual.
+    func printHidden(_ text: String) {
+        try? (text + "\n").write(to: shell.printURL, atomically: true, encoding: .utf8)
+        signalShell(SIGUSR2, fallback: "cat '" + shell.printURL.path + "'\n")
+    }
+
+    /// Si el shell aún no está en marcha (no hay PID) no hay quien atienda la
+    /// señal: se teclea el comando a la antigua antes que perder la acción.
+    private func signalShell(_ sig: Int32, fallback: String) {
+        if let pid = view.process?.shellPid, pid > 0 {
+            kill(pid, sig)
+        } else {
+            send(fallback)
+        }
+    }
+
     /// Pinta un paso de boo EN la pantalla del terminal (atenuado, con el
     /// fantasma), sin mandarlo al shell. Transparencia estilo Claude Code.
     func printStep(_ text: String) {
